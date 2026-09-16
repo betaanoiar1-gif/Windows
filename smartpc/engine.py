@@ -6,8 +6,10 @@ from .diagnostics import diagnose
 from .health import health_score
 from .learning import Baseline
 from .monitor import snapshot
+from .network import snapshot as network_snapshot, diagnose as diagnose_network, recommended_repairs, repair as repair_network
 from .safety import authorize_all
 from .storage import safe_quarantine, scan_temp
+
 
 class Engine:
     def __init__(self, data_dir=None):
@@ -17,22 +19,37 @@ class Engine:
         self.db = DB(self.data / "smartpc.db")
         self.ai = AIClient(timeout=self.settings.ai_timeout_seconds)
 
-    def inspect(self, include_ai=True):
+    def inspect(self, include_ai=True, network_probes=True):
         current = snapshot()
         self.db.snapshot(current)
         history = self.db.recent_snapshots(30)
         baseline = Baseline(history[:-1])
         candidates = authorize_all(scan_temp(self.settings.max_scan_files), auto=False)
         diagnoses = diagnose(current, history[:-1])
+        net = network_snapshot(probes=network_probes)
+        net_issues = diagnose_network(net)
         payload = {
             "system": current.to_dict(),
             "health_score": health_score(current, diagnoses),
             "baseline": baseline.summary(),
             "diagnoses": [d.to_dict() for d in diagnoses],
+            "network": net.to_dict(),
+            "network_diagnoses": net_issues,
+            "network_recommended_repairs": recommended_repairs(net_issues),
             "candidates": [{"candidate_id": str(i), **c.to_dict()} for i, c in enumerate(candidates)]
         }
-        ai = self.ai.analyze(payload) if include_ai else {"mode":"disabled","actions":[]}
-        return {"snapshot": current, "candidates": candidates, "diagnoses": diagnoses, "health_score": payload["health_score"], "baseline": payload["baseline"], "ai": ai}
+        ai = self.ai.analyze(payload) if include_ai else {"mode": "disabled", "actions": []}
+        return {
+            "snapshot": current,
+            "candidates": candidates,
+            "diagnoses": diagnoses,
+            "health_score": payload["health_score"],
+            "baseline": payload["baseline"],
+            "network": net,
+            "network_diagnoses": net_issues,
+            "network_recommended_repairs": payload["network_recommended_repairs"],
+            "ai": ai,
+        }
 
     def optimize_safe(self):
         before = snapshot()
@@ -45,6 +62,18 @@ class Engine:
         after = snapshot()
         self.db.snapshot(after)
         return {"before": before, "after": after, "moved": moved}
+
+    def network_inspect(self, probes=True):
+        net = network_snapshot(probes=probes)
+        issues = diagnose_network(net)
+        return {"network": net, "diagnoses": issues, "recommended_repairs": recommended_repairs(issues)}
+
+    def network_repair(self, action: str, verify=True):
+        before = self.network_inspect(probes=True)
+        result = repair_network(action)
+        after = self.network_inspect(probes=True) if verify else None
+        self.db.action(dt.datetime.now(dt.timezone.utc).isoformat(), f"network:{action}", "network", "ok" if result["ok"] else "failed")
+        return {"before": before, "result": result, "after": after}
 
     def restore(self, token: str):
         from .storage import restore
