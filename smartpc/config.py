@@ -29,14 +29,14 @@ class Settings:
     auto_predictive_horizon_hours: float = 24.0
     auto_predictive_min_samples: int = 6
     auto_predictive_min_rate_gb_hour: float = 0.25
-    # Unattended mutation is deliberately bounded independently of scan size.
     auto_max_files: int = 50
     auto_max_bytes: int = 512 * 1024 * 1024
     auto_cooldown_minutes: float = 360.0
     auto_daily_max_bytes: int = 1024 * 1024 * 1024
+    # Low-overhead telemetry used by startup/background maintenance.
+    fast_monitor_interval: float = 0.10
+    max_process_rows: int = 12
     max_scan_files: int = 10000
-    # Kept for compatibility with older callers; autonomous cleanup uses the
-    # stricter auto_max_files budget above.
     max_quarantine_files: int = 5000
     ai_timeout_seconds: int = 30
 
@@ -61,6 +61,8 @@ class Settings:
             auto_max_bytes=_int_env("SMARTPC_AUTO_MAX_BYTES", 512 * 1024 * 1024, 1024 * 1024),
             auto_cooldown_minutes=_float_env("SMARTPC_AUTO_COOLDOWN_MINUTES", 360.0, 0.0),
             auto_daily_max_bytes=_int_env("SMARTPC_AUTO_DAILY_MAX_BYTES", 1024 * 1024 * 1024, 1024 * 1024),
+            fast_monitor_interval=_float_env("SMARTPC_FAST_MONITOR_INTERVAL", 0.10, 0.0),
+            max_process_rows=_int_env("SMARTPC_MAX_PROCESS_ROWS", 12, 4),
             max_scan_files=_int_env("SMARTPC_MAX_SCAN_FILES", 10000, 100),
             max_quarantine_files=_int_env("SMARTPC_MAX_QUARANTINE_FILES", 5000, 1),
             ai_timeout_seconds=_int_env("SMARTPC_AI_TIMEOUT", 30, 5),
