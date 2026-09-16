@@ -1,22 +1,33 @@
 name: tests
+
 on:
   push:
   pull_request:
+
 jobs:
   test:
     runs-on: windows-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - run: python -m pip install -r requirements.txt
-      - run: python -m compileall -q smartpc main.py
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt
+      - name: Compile all Python modules
+        run: python -m compileall -q smartpc main.py
         env:
           PYTHONPATH: ${{ github.workspace }}
-      - run: pytest -q
+      - name: Run unified regression suite
+        run: pytest -q
         env:
           PYTHONPATH: ${{ github.workspace }}
-      - run: python main.py --help
+      - name: CLI help smoke test
+        run: python main.py --help
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+      - name: Offline system inspection smoke test
+        run: python main.py --inspect --no-ai --no-network-probes
         env:
           PYTHONPATH: ${{ github.workspace }}
