@@ -8,7 +8,10 @@ import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass, asdict
-from typing import Any
+from typing import Any, Callable
+
+
+CommandRunner = Callable[[list[str], int], tuple[int, str, str]]
 
 
 @dataclass(frozen=True)
@@ -34,7 +37,7 @@ def _run(args: list[str], timeout: int = 10) -> tuple[int, str, str]:
 
 
 def https_probe(url: str, timeout: float = 5.0) -> ProbeResult:
-    """Bounded HTTPS GET. A HTTP error still proves that transport reached the host."""
+    """Bounded HTTPS GET. HTTP errors still prove that TLS/HTTP transport reached the host."""
     started = time.perf_counter()
     request = urllib.request.Request(url, method="GET", headers={"User-Agent": "SMARTPC-AI/0.1"})
     try:
@@ -55,28 +58,76 @@ def multi_https_probe(urls: tuple[str, ...] = (
     return [https_probe(url) for url in urls]
 
 
-def wifi_diagnostics() -> dict[str, Any]:
+def _parse_key_values(text: str) -> dict[str, str]:
+    """Parse localized netsh output without depending on translated value text."""
+    result: dict[str, str] = {}
+    for line in text.splitlines():
+        if ":" not in line:
+            continue
+        key, value = line.split(":", 1)
+        key = re.sub(r"\s+", " ", key.strip().lower())
+        value = value.strip()
+        if key and value:
+            result[key] = value
+    return result
+
+
+def _first_value(fields: dict[str, str], *names: str) -> str | None:
+    for name in names:
+        value = fields.get(name.lower())
+        if value:
+            return value
+    return None
+
+
+def _number(value: str | None) -> float | None:
+    if not value:
+        return None
+    match = re.search(r"\d+(?:[.,]\d+)?", value)
+    if not match:
+        return None
+    try:
+        return float(match.group(0).replace(",", "."))
+    except ValueError:
+        return None
+
+
+def parse_wifi_interfaces(text: str) -> list[dict[str, Any]]:
+    """Parse the interface section of netsh output using numeric evidence where possible."""
+    blocks = re.split(r"\n\s*\n", text.strip()) if text.strip() else []
+    results: list[dict[str, Any]] = []
+    for block in blocks:
+        fields = _parse_key_values(block)
+        if not fields:
+            continue
+        state = _first_value(fields, "state", "état")
+        ssid = _first_value(fields, "ssid")
+        signal = _number(_first_value(fields, "signal", "signal du réseau"))
+        channel = _number(_first_value(fields, "channel", "canal"))
+        radio = _first_value(fields, "radio type", "type de radio")
+        rx = _number(_first_value(fields, "receive rate (mbps)", "vitesse de réception (mbits/s)"))
+        tx = _number(_first_value(fields, "transmit rate (mbps)", "vitesse de transmission (mbits/s)"))
+        if any(x is not None for x in (ssid, signal, channel, radio, rx, tx)) or state:
+            results.append({
+                "state": state,
+                "ssid": ssid,
+                "signal_percent": signal,
+                "channel": int(channel) if channel is not None else None,
+                "radio_type": radio,
+                "receive_rate_mbps": rx,
+                "transmit_rate_mbps": tx,
+            })
+    return results
+
+
+def wifi_diagnostics(runner: CommandRunner | None = None) -> dict[str, Any]:
     """Read-only Wi-Fi state/driver information; no adapter changes are performed."""
-    state_rc, state_out, state_err = _run(["netsh", "wlan", "show", "interfaces"])
-    driver_rc, driver_out, driver_err = _run(["netsh", "wlan", "show", "drivers"])
-    text = state_out + "\n" + state_err
-    fields: dict[str, str] = {}
-    patterns = {
-        "state": r"(?:State|État)\s*:\s*(.+)",
-        "ssid": r"(?:SSID)\s*:\s*(.+)",
-        "signal": r"(?:Signal|Signal du réseau)\s*:\s*(\d+)%",
-        "channel": r"(?:Channel|Canal)\s*:\s*(\d+)",
-        "radio": r"(?:Radio type|Type de radio)\s*:\s*(.+)",
-        "receive_rate_mbps": r"(?:Receive rate \(Mbps\)|Vitesse de réception \(Mbits/s\))\s*:\s*([\d.]+)",
-        "transmit_rate_mbps": r"(?:Transmit rate \(Mbps\)|Vitesse de transmission \(Mbits/s\))\s*:\s*([\d.]+)",
-    }
-    for key, pattern in patterns.items():
-        match = re.search(pattern, text, re.I)
-        if match:
-            fields[key] = match.group(1).strip()
+    run = runner or _run
+    state_rc, state_out, state_err = run(["netsh", "wlan", "show", "interfaces"], 10)
+    driver_rc, driver_out, driver_err = run(["netsh", "wlan", "show", "drivers"], 10)
     return {
         "available": state_rc == 0,
-        "fields": fields,
+        "interfaces": parse_wifi_interfaces(state_out),
         "interfaces_raw": state_out[-6000:],
         "drivers_raw": driver_out[-8000:],
         "command_errors": [x for x in (state_err, driver_err) if x],
@@ -103,13 +154,43 @@ def compare_dns_hosts(hosts: tuple[str, ...] = (
     return [dns_latency(host) for host in hosts]
 
 
-def mtu_probe(host: str, payload_sizes: tuple[int, ...] = (1472, 1400, 1300, 1200)) -> dict[str, Any]:
-    """Read-only DF ping sampling. Results are evidence only; MTU is never changed automatically."""
-    results: list[dict[str, Any]] = []
-    for size in payload_sizes:
-        rc, out, err = _run(["ping", "-n", "1", "-f", "-l", str(size), "-w", "2000", host], timeout=5)
-        results.append({"payload_bytes": size, "ok": rc == 0, "output": (out or err)[-1500:]})
-    return {"host": host, "samples": results, "recommendation": "investigate only if repeated failures show a path-MTU pattern"}
+def _ping_payload(host: str, size: int, runner: CommandRunner | None = None) -> bool:
+    run = runner or _run
+    rc, _, _ = run(["ping", "-n", "1", "-f", "-l", str(size), "-w", "1500", host], 5)
+    return rc == 0
+
+
+def mtu_probe(
+    host: str,
+    payload_sizes: tuple[int, ...] | None = None,
+    runner: CommandRunner | None = None,
+) -> dict[str, Any]:
+    """Read-only IPv4 DF probe. Estimates the largest successful payload; never changes MTU."""
+    if payload_sizes is not None:
+        sizes = tuple(sorted({max(576, min(1472, int(x))) for x in payload_sizes}, reverse=True))
+        results = [{"payload_bytes": size, "ok": _ping_payload(host, size, runner)} for size in sizes]
+        largest = max((x["payload_bytes"] for x in results if x["ok"]), default=None)
+        return {"host": host, "samples": results, "largest_successful_payload": largest, "mtu_estimate": largest + 28 if largest else None, "method": "sampled_df_ping"}
+
+    low, high = 576, 1472
+    samples: list[dict[str, Any]] = []
+    while low <= high and len(samples) < 8:
+        mid = (low + high) // 2
+        ok = _ping_payload(host, mid, runner)
+        samples.append({"payload_bytes": mid, "ok": ok})
+        if ok:
+            low = mid + 1
+        else:
+            high = mid - 1
+    largest = max((x["payload_bytes"] for x in samples if x["ok"]), default=None)
+    return {
+        "host": host,
+        "samples": samples,
+        "largest_successful_payload": largest,
+        "mtu_estimate": largest + 28 if largest else None,
+        "method": "binary_search_df_ping",
+        "recommendation": "diagnostic evidence only; do not change MTU automatically",
+    }
 
 
 def summarize_https(results: list[ProbeResult]) -> dict[str, Any]:
