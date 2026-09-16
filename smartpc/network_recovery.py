@@ -5,6 +5,7 @@ from dataclasses import dataclass, asdict
 from typing import Any, Callable
 
 from .network import diagnose, recommended_repairs, repair, snapshot
+from .network_diagnostics import diagnose_connectivity, dns_probe, https_probe
 
 
 @dataclass(frozen=True)
@@ -91,16 +92,23 @@ def execute_verified(
 
 def diagnose_and_plan(probes: bool = True) -> dict[str, Any]:
     current = snapshot(probes=probes)
-    issues = diagnose(current)
+    connectivity = diagnose_connectivity(dns_probe(), https_probe()) if probes else None
+    issues = diagnose(current, connectivity=connectivity)
     plan = build_plan(issues)
-    return {"snapshot": current.to_dict(), "issues": issues, "plan": [x.to_dict() for x in plan]}
+    return {
+        "snapshot": current.to_dict(),
+        "connectivity": connectivity.to_dict() if connectivity else None,
+        "issues": issues,
+        "plan": [x.to_dict() for x in plan],
+    }
 
 
 def verify_recovery(before: dict[str, Any], probes: bool = True) -> dict[str, Any]:
     """Re-probe after recovery and report issue disappearance plus layered evidence."""
     after = snapshot(probes=probes)
+    connectivity = diagnose_connectivity(dns_probe(), https_probe()) if probes else None
     before_issues = diagnose(_snapshot_from_dict(before)) if isinstance(before, dict) else []
-    after_issues = diagnose(after)
+    after_issues = diagnose(after, connectivity=connectivity)
     before_codes = {x.get("code") for x in before_issues}
     after_codes = {x.get("code") for x in after_issues}
     before_gateway = ((before.get("internet") or {}).get("gateway_ping") or {})
@@ -111,6 +119,7 @@ def verify_recovery(before: dict[str, Any], probes: bool = True) -> dict[str, An
     after_loss = after_gateway.get("packet_loss_percent")
     return {
         "after": after.to_dict(),
+        "connectivity": connectivity.to_dict() if connectivity else None,
         "resolved_issue_codes": sorted(str(x) for x in before_codes - after_codes if x),
         "remaining_issue_codes": sorted(str(x) for x in after_codes if x),
         "gateway_changed_to_ok": before_gateway.get("ok") is not True and after_gateway.get("ok") is True,
