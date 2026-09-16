@@ -13,6 +13,7 @@ from .network import snapshot as network_snapshot, diagnose as diagnose_network,
 from .network_advanced import advanced_snapshot
 from .network_diagnostics import dns_probe, https_probe, diagnose_connectivity
 from .network_health import evaluate as evaluate_network_health
+from .network_processes import connection_inventory
 from .network_recovery import RISK, RecoveryStep, diagnose_and_plan, execute_verified
 from .safety import authorize_all
 from .storage import safe_quarantine, scan_temp
@@ -53,6 +54,7 @@ class Engine:
             "network_advanced": advanced_network,
             "network_diagnoses": net_issues,
             "network_recommended_repairs": recommended_repairs(net_issues),
+            "network_processes": connection_inventory() if network_probes else None,
             "candidates": [{"candidate_id": str(i), **c.to_dict()} for i, c in enumerate(candidates)],
         }
         ai = self.ai.analyze(payload) if include_ai else {"mode": "disabled", "actions": []}
@@ -60,7 +62,8 @@ class Engine:
             "snapshot": current, "candidates": candidates, "diagnoses": diagnoses,
             "health_score": payload["health_score"], "baseline": payload["baseline"],
             "network": net, "network_health": net_health, "network_connectivity": connectivity,
-            "network_advanced": advanced_network, "network_diagnoses": net_issues,
+            "network_advanced": advanced_network, "network_processes": payload["network_processes"],
+            "network_diagnoses": net_issues,
             "network_recommended_repairs": payload["network_recommended_repairs"], "ai": ai,
         }
 
@@ -82,6 +85,7 @@ class Engine:
         health = evaluate_network_health(net)
         connectivity = None
         advanced_network = None
+        process_network = connection_inventory() if probes else None
         if probes:
             connectivity = diagnose_connectivity(dns_probe(), https_probe())
             gateway = net.default_gateways[0] if net.default_gateways else None
@@ -89,8 +93,9 @@ class Engine:
         plan = diagnose_and_plan(probes=probes)
         return {
             "network": net, "health": health, "connectivity": connectivity,
-            "advanced": advanced_network, "diagnoses": issues,
-            "recommended_repairs": recommended_repairs(issues), "recovery_plan": plan["plan"],
+            "advanced": advanced_network, "process_network": process_network,
+            "diagnoses": issues, "recommended_repairs": recommended_repairs(issues),
+            "recovery_plan": plan["plan"],
         }
 
     def network_repair(self, action: str, confirm_medium=False, verify=True):
@@ -105,7 +110,7 @@ class Engine:
             requires_reboot=action in {"reset_winsock", "reset_tcpip"},
             requires_admin=action in {"renew_dhcp", "reset_winsock", "reset_tcpip"},
         )
-        confirm = (lambda _step: True) if (risk not in {"medium", "high", "critical"} or confirm_medium) else None
+        confirm = (lambda _step: True) if risk == "safe" else ((lambda _step: True) if (risk == "low" and confirm_medium) else None)
         results = execute_verified([step], confirm=confirm)
         result = results[0] if results else {"action": action, "ok": False, "skipped": True, "reason": "no recovery result"}
         after = self.network_inspect(probes=True) if verify and result.get("ok") else None
@@ -118,6 +123,7 @@ class Engine:
                 "health_score_after": after_score,
                 "improved": after_score > before_score,
                 "unchanged": after_score == before_score,
+                "effective": after_score > before_score or bool(set(before["diagnoses"]) - set(after["diagnoses"])),
                 "remaining_issues": after["diagnoses"],
                 "advanced_after": after.get("advanced"),
             }
