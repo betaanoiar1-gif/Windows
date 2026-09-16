@@ -12,6 +12,7 @@ def main():
     p.add_argument("--network", action="store_true", help="inspect network health with real probes")
     p.add_argument("--network-plan", action="store_true", help="diagnose network and show a safe recovery plan")
     p.add_argument("--network-repair", choices=["flush_dns", "renew_dhcp", "reset_winsock", "reset_tcpip"], help="run one explicit network repair and verify it")
+    p.add_argument("--confirm", action="store_true", help="explicitly authorize medium-risk network repair")
     p.add_argument("--optimize-safe", action="store_true")
     p.add_argument("--restore", metavar="TOKEN")
     p.add_argument("--install-startup", action="store_true")
@@ -31,16 +32,17 @@ def main():
     if args.restore:
         print(engine.restore(args.restore)); return 0
     if args.network_repair:
-        print(json.dumps(engine.network_repair(args.network_repair), ensure_ascii=False, indent=2, default=str)); return 0
+        result = engine.network_repair(args.network_repair, confirm_medium=args.confirm)
+        print(json.dumps(result, ensure_ascii=False, indent=2, default=str)); return 0 if result["result"].get("ok") else 2
     if args.network_plan:
         r = engine.network_inspect()
-        print(json.dumps({"health": r["health"].to_dict(), "diagnoses": r["diagnoses"], "recommended_repairs": r["recommended_repairs"], "recovery_plan": r["recovery_plan"]}, ensure_ascii=False, indent=2)); return 0
+        print(json.dumps({"health": r["health"].to_dict(), "connectivity": r["connectivity"].to_dict() if r["connectivity"] else None, "diagnoses": r["diagnoses"], "recommended_repairs": r["recommended_repairs"], "recovery_plan": r["recovery_plan"]}, ensure_ascii=False, indent=2)); return 0
     if args.network:
         r = engine.network_inspect()
-        print(json.dumps({"network": r["network"].to_dict(), "health": r["health"].to_dict(), "diagnoses": r["diagnoses"], "recommended_repairs": r["recommended_repairs"], "recovery_plan": r["recovery_plan"]}, ensure_ascii=False, indent=2)); return 0
+        print(json.dumps({"network": r["network"].to_dict(), "health": r["health"].to_dict(), "connectivity": r["connectivity"].to_dict() if r["connectivity"] else None, "diagnoses": r["diagnoses"], "recommended_repairs": r["recommended_repairs"], "recovery_plan": r["recovery_plan"]}, ensure_ascii=False, indent=2)); return 0
     if args.inspect:
         r = engine.inspect()
-        print(json.dumps({"system": r["snapshot"].to_dict(), "diagnoses": [d.to_dict() for d in r["diagnoses"]], "candidate_count": len(r["candidates"]), "network": r["network"].to_dict(), "network_health": r["network_health"].to_dict(), "network_diagnoses": r["network_diagnoses"], "network_recommended_repairs": r["network_recommended_repairs"], "ai": r["ai"]}, ensure_ascii=False, indent=2))
+        print(json.dumps({"system": r["snapshot"].to_dict(), "diagnoses": [d.to_dict() for d in r["diagnoses"]], "candidate_count": len(r["candidates"]), "network": r["network"].to_dict(), "network_health": r["network_health"].to_dict(), "network_connectivity": r["network_connectivity"].to_dict() if r["network_connectivity"] else None, "network_diagnoses": r["network_diagnoses"], "network_recommended_repairs": r["network_recommended_repairs"], "ai": r["ai"]}, ensure_ascii=False, indent=2))
         return 0
     if args.optimize_safe:
         r = engine.optimize_safe()
