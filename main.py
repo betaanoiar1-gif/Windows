@@ -3,7 +3,7 @@ import json
 
 from smartpc.engine import Engine
 from smartpc.ui import run
-from smartpc.windows import install_startup_task, remove_startup_task, startup_status
+from smartpc.windows import install_startup_task, maintenance_status, remove_startup_task, startup_status
 
 
 def _dump(value):
@@ -11,8 +11,9 @@ def _dump(value):
 
 
 def main():
-    p = argparse.ArgumentParser(description="SMARTPC AI — safety-first Windows optimization")
-    p.add_argument("--background", action="store_true", help="observe only; no cleanup or network repair")
+    p = argparse.ArgumentParser(description="SMARTPC AI — safety-first autonomous Windows optimization")
+    p.add_argument("--background", action="store_true", help="run one autonomous maintenance cycle")
+    p.add_argument("--observe-only", action="store_true", help="run read-only background observation")
     p.add_argument("--inspect", action="store_true", help="inspect system and network evidence")
     p.add_argument("--deep-disk-scan", action="store_true", help="deep C: drive reclaimable-data inventory; no changes")
     p.add_argument("--network", action="store_true", help="inspect network health")
@@ -29,18 +30,28 @@ def main():
     args = p.parse_args()
 
     if args.background:
+        result = Engine().autonomous_maintenance()
+        _dump({
+            "mode": result["mode"],
+            "pressure_before": result["pressure_before"],
+            "pressure_after": result["pressure_after"],
+            "quarantined": len(result["moved"]),
+            "skipped_reason": result["skipped_reason"],
+        })
+        return 0
+    if args.observe_only:
         Engine().inspect(include_ai=False, network_probes=False)
         return 0
     if args.install_startup:
         install_startup_task()
-        print("Startup observation task installed.")
+        print("SMARTPC AI autonomous startup + maintenance tasks installed.")
         return 0
     if args.remove_startup:
-        result = remove_startup_task()
-        print("Startup task removed/requested.")
-        return 0 if result is None or result.returncode == 0 else 2
+        results = remove_startup_task()
+        print("SMARTPC AI startup + maintenance tasks removed/requested.")
+        return 0 if results is None or all(r is None or r.returncode == 0 for r in results) else 2
     if args.startup_status:
-        print("installed" if startup_status() else "not-installed")
+        print(json.dumps({"observation": startup_status(), "maintenance": maintenance_status()}))
         return 0
 
     engine = Engine()
