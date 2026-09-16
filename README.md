@@ -38,7 +38,7 @@ The network subsystem diagnoses real connectivity layers rather than claiming to
 - bounded IPv4 DF-ping MTU sampling/binary search;
 - network byte/packet counters and health/stability indicators.
 
-The gateway ping is an ICMP probe, not proof of Internet availability. When the gateway does not answer ICMP but external HTTPS succeeds, SMARTPC records the ICMP limitation as evidence instead of falsely declaring an Internet outage or recommending a repair. This follows Microsoft's guidance that ICMP can be blocked and should not be relied upon alone to prove overall connectivity. citeturn0search2turn0search1
+The gateway ping is an ICMP probe, not proof of Internet availability. When the gateway does not answer ICMP but external HTTPS succeeds, SMARTPC records the ICMP limitation as evidence instead of falsely declaring an Internet outage or recommending a repair.
 
 Wi-Fi parsing accepts common English and French Windows labels and retains raw command output for evidence. MTU diagnostics never change the adapter MTU.
 
