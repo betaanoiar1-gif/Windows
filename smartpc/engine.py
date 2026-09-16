@@ -14,7 +14,7 @@ from .network_advanced import advanced_snapshot
 from .network_diagnostics import dns_probe, https_probe, diagnose_connectivity
 from .network_health import evaluate as evaluate_network_health
 from .network_processes import connection_inventory
-from .network_recovery import RISK, RecoveryStep, diagnose_and_plan, execute_verified
+from .network_recovery import RISK, RecoveryStep, build_plan, execute_verified
 from .safety import authorize_all
 from .storage import safe_quarantine, scan_temp
 
@@ -90,7 +90,7 @@ class Engine:
             advanced_network = advanced_snapshot(default_gateway=gateway, probes=True)
         issues = diagnose_network(net, connectivity=connectivity)
         health = evaluate_network_health(net, connectivity=connectivity)
-        plan = [step.to_dict() for step in __import__("smartpc.network_recovery", fromlist=["build_plan"]).build_plan(issues)]
+        plan = [step.to_dict() for step in build_plan(issues)]
         return {
             "network": net, "health": health, "connectivity": connectivity,
             "advanced": advanced_network, "process_network": process_network,
