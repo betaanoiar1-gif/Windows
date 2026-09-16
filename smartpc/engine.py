@@ -76,6 +76,58 @@ class Engine:
         candidates = scan_deep(max_files=self.settings.max_scan_files, min_age_days=1.0)
         return {"candidates": candidates, "summary": summarize_disk_cleanup(candidates)}
 
+    def _disk_pressure(self, current):
+        disk = current.disk
+        total = max(float(disk.get("total", 0)), 0.0)
+        free = max(float(disk.get("free", 0)), 0.0)
+        free_percent = (free / total * 100.0) if total else 100.0
+        free_gb = free / (1024 ** 3)
+        critical = free_percent <= self.settings.auto_cleanup_free_percent or free_gb <= self.settings.auto_cleanup_free_gb
+        return {
+            "drive": "system",
+            "total_gb": round(total / (1024 ** 3), 2),
+            "free_gb": round(free_gb, 2),
+            "free_percent": round(free_percent, 2),
+            "state": "critical" if critical else "normal",
+            "auto_cleanup_triggered": bool(critical and self.settings.auto_safe_cleanup),
+        }
+
+    def autonomous_maintenance(self):
+        """Run a bounded, unattended maintenance cycle.
+
+        Observation always runs. Mutation is gated by disk pressure and the
+        local safety policy; only reversible temporary-file quarantine is
+        allowed. No network repair, registry edit, service change, or AI
+        command execution is performed here.
+        """
+        before = snapshot()
+        self.db.snapshot(before)
+        pressure = self._disk_pressure(before)
+        moved = []
+        skipped_reason = None
+
+        if pressure["auto_cleanup_triggered"]:
+            candidates = authorize_all(scan_temp(self.settings.max_scan_files), auto=True)
+            moved = safe_quarantine(candidates, self.data / "quarantine", self.settings.max_quarantine_files)
+            ts = dt.datetime.now(dt.timezone.utc).isoformat()
+            for src, dst, token in moved:
+                self.db.action(ts, "autonomous_quarantine", src, f"ok:{dst}:{token}")
+        else:
+            skipped_reason = "disk pressure below autonomous cleanup threshold"
+
+        after = snapshot()
+        self.db.snapshot(after)
+        after_pressure = self._disk_pressure(after)
+        return {
+            "before": before,
+            "after": after,
+            "pressure_before": pressure,
+            "pressure_after": after_pressure,
+            "moved": moved,
+            "skipped_reason": skipped_reason,
+            "mode": "autonomous_safe_maintenance",
+        }
+
     def optimize_safe(self):
         before = snapshot()
         self.db.snapshot(before)
