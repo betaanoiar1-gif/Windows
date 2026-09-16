@@ -1,11 +1,11 @@
 from .db import DB
 from .learning import Baseline
-from .monitor import snapshot_fast
+from .monitor import snapshot
 
 
 def observe_once(data_dir):
-    """Capture minimal local telemetry for fast, read-only startup learning."""
-    current = snapshot_fast()
+    """Capture the complete local telemetry at startup in read-only mode."""
+    current = snapshot()
     db = DB(data_dir / "smartpc.db")
     db.snapshot(current)
     history = db.recent_snapshots(30)
