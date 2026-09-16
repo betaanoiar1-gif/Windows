@@ -77,15 +77,13 @@ class Engine:
         return {"candidates": candidates, "summary": summarize_disk_cleanup(candidates)}
 
     def _disk_pressure(self, current):
-        disk = current.disk
-        total = max(float(disk.get("total", 0)), 0.0)
-        free = max(float(disk.get("free", 0)), 0.0)
-        free_percent = (free / total * 100.0) if total else 100.0
-        free_gb = free / (1024 ** 3)
+        free_gb = max(float(current.disk_free_gb), 0.0)
+        free_percent = max(0.0, 100.0 - float(current.disk_percent))
+        total_gb = (free_gb / (free_percent / 100.0)) if free_percent > 0 else 0.0
         critical = free_percent <= self.settings.auto_cleanup_free_percent or free_gb <= self.settings.auto_cleanup_free_gb
         return {
             "drive": "system",
-            "total_gb": round(total / (1024 ** 3), 2),
+            "total_gb": round(total_gb, 2),
             "free_gb": round(free_gb, 2),
             "free_percent": round(free_percent, 2),
             "state": "critical" if critical else "normal",
