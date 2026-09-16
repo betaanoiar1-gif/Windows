@@ -7,6 +7,8 @@ from .health import health_score
 from .learning import Baseline
 from .monitor import snapshot
 from .network import snapshot as network_snapshot, diagnose as diagnose_network, recommended_repairs, repair as repair_network
+from .network_health import evaluate as evaluate_network_health
+from .network_recovery import diagnose_and_plan
 from .safety import authorize_all
 from .storage import safe_quarantine, scan_temp
 
@@ -28,28 +30,20 @@ class Engine:
         diagnoses = diagnose(current, history[:-1])
         net = network_snapshot(probes=network_probes)
         net_issues = diagnose_network(net)
+        net_health = evaluate_network_health(net)
         payload = {
             "system": current.to_dict(),
             "health_score": health_score(current, diagnoses),
             "baseline": baseline.summary(),
             "diagnoses": [d.to_dict() for d in diagnoses],
             "network": net.to_dict(),
+            "network_health": net_health.to_dict(),
             "network_diagnoses": net_issues,
             "network_recommended_repairs": recommended_repairs(net_issues),
             "candidates": [{"candidate_id": str(i), **c.to_dict()} for i, c in enumerate(candidates)]
         }
         ai = self.ai.analyze(payload) if include_ai else {"mode": "disabled", "actions": []}
-        return {
-            "snapshot": current,
-            "candidates": candidates,
-            "diagnoses": diagnoses,
-            "health_score": payload["health_score"],
-            "baseline": payload["baseline"],
-            "network": net,
-            "network_diagnoses": net_issues,
-            "network_recommended_repairs": payload["network_recommended_repairs"],
-            "ai": ai,
-        }
+        return {"snapshot": current, "candidates": candidates, "diagnoses": diagnoses, "health_score": payload["health_score"], "baseline": payload["baseline"], "network": net, "network_health": net_health, "network_diagnoses": net_issues, "network_recommended_repairs": payload["network_recommended_repairs"], "ai": ai}
 
     def optimize_safe(self):
         before = snapshot()
@@ -66,7 +60,9 @@ class Engine:
     def network_inspect(self, probes=True):
         net = network_snapshot(probes=probes)
         issues = diagnose_network(net)
-        return {"network": net, "diagnoses": issues, "recommended_repairs": recommended_repairs(issues)}
+        health = evaluate_network_health(net)
+        plan = diagnose_and_plan(probes=probes)
+        return {"network": net, "health": health, "diagnoses": issues, "recommended_repairs": recommended_repairs(issues), "recovery_plan": plan["plan"]}
 
     def network_repair(self, action: str, verify=True):
         before = self.network_inspect(probes=True)
