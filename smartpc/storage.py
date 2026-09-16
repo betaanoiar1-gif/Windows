@@ -67,22 +67,30 @@ def hash_file(path: Path, chunk: int = 1024 * 1024) -> str:
     return h.hexdigest()
 
 
-def safe_quarantine(candidates, quarantine: Path, limit: int = 5000):
+def safe_quarantine(candidates, quarantine: Path, limit: int = 50, max_bytes: int = 512 * 1024 * 1024):
+    """Move only authorized candidates within strict per-cycle file/byte budgets."""
     quarantine.mkdir(parents=True, exist_ok=True)
     manifest = quarantine / "manifest.jsonl"
     moved = []
-    for c in candidates[:limit]:
+    moved_bytes = 0
+    for c in candidates:
+        if len(moved) >= max(0, limit) or moved_bytes >= max(0, max_bytes):
+            break
         src = Path(c.target)
+        size = max(0, int(c.size))
         if c.action != Action.QUARANTINE or not src.is_file() or src.is_symlink():
+            continue
+        if size > max_bytes - moved_bytes:
             continue
         try:
             token = hashlib.sha256(f"{src.resolve()}|{time.time_ns()}".encode()).hexdigest()[:24]
             dest = quarantine / f"{token}_{src.name}"
             shutil.move(str(src), str(dest))
-            record = {"id": token, "original": str(src), "quarantined": str(dest), "ts": time.time(), "size": c.size}
+            record = {"id": token, "original": str(src), "quarantined": str(dest), "ts": time.time(), "size": size}
             with manifest.open("a", encoding="utf-8") as f:
                 f.write(json.dumps(record, ensure_ascii=False) + "\n")
             moved.append((str(src), str(dest), token))
+            moved_bytes += size
         except (OSError, PermissionError, shutil.Error):
             continue
     return moved
