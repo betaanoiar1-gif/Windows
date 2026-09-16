@@ -49,11 +49,20 @@ def _windows_gateways() -> list[str]:
     if rc != 0:
         return []
     gateways: list[str] = []
+    collecting = False
     for line in out.splitlines():
         if "Default Gateway" in line or "Passerelle par défaut" in line:
+            collecting = True
             value = line.split(":", 1)[-1].strip()
             if _valid_ip(value):
                 gateways.append(value)
+            continue
+        if collecting:
+            value = line.strip()
+            if value and _valid_ip(value):
+                gateways.append(value)
+            else:
+                collecting = False
     return sorted(set(gateways))
 
 
@@ -71,9 +80,9 @@ def _windows_dns() -> list[str]:
                 servers.append(value)
             continue
         if collecting:
-            stripped = line.strip()
-            if stripped and _valid_ip(stripped):
-                servers.append(stripped)
+            value = line.strip()
+            if value and _valid_ip(value):
+                servers.append(value)
             else:
                 collecting = False
     return sorted(set(servers))
@@ -82,10 +91,11 @@ def _windows_dns() -> list[str]:
 def _proxy() -> dict[str, Any]:
     if os.name != "nt":
         return {"enabled": False, "source": "unsupported"}
-    rc, out, _ = _run(["netsh", "winhttp", "show", "proxy"])
-    text = (out or "").strip()
-    direct = "direct access" in text.lower() or "accès direct" in text.lower()
-    return {"enabled": not direct, "raw": text, "source": "winhttp"}
+    rc, out, err = _run(["netsh", "winhttp", "show", "proxy"])
+    text = (out or err or "").strip()
+    lower = text.lower()
+    direct = "direct access" in lower or "accès direct" in lower
+    return {"enabled": bool(text) and not direct, "raw": text, "source": "winhttp", "command_ok": rc == 0}
 
 
 def _interfaces() -> list[dict[str, Any]]:
@@ -109,10 +119,10 @@ def _interfaces() -> list[dict[str, Any]]:
 def _probe_host(host: str, timeout: float = 2.0) -> dict[str, Any]:
     started = time.perf_counter()
     try:
-        socket.getaddrinfo(host, 443, type=socket.SOCK_STREAM)
-        return {"host": host, "ok": True, "latency_ms": round((time.perf_counter() - started) * 1000, 2)}
+        addresses = socket.getaddrinfo(host, 443, type=socket.SOCK_STREAM)
+        return {"host": host, "ok": bool(addresses), "latency_ms": round((time.perf_counter() - started) * 1000, 2), "addresses": sorted({x[4][0] for x in addresses})}
     except OSError as exc:
-        return {"host": host, "ok": False, "latency_ms": round((time.perf_counter() - started) * 1000, 2), "error": str(exc)}
+        return {"host": host, "ok": False, "latency_ms": round((time.perf_counter() - started) * 1000, 2), "error": str(exc), "addresses": []}
 
 
 def _ping(host: str, count: int = 3) -> dict[str, Any]:
@@ -156,16 +166,15 @@ def diagnose(s: NetworkSnapshot) -> list[dict[str, Any]]:
     issues: list[dict[str, Any]] = []
     up = [i for i in s.interfaces if i["is_up"] and i["addresses"]]
     if not up:
-        issues.append({"code": "NET_NO_ACTIVE_INTERFACE", "severity": "high", "title": "No active network interface", "evidence": ["No up interface with an IP address was detected"]})
-        return issues
+        return [{"code": "NET_NO_ACTIVE_INTERFACE", "severity": "high", "title": "No active network interface", "evidence": ["No up interface with an IP address was detected"]}]
     if not s.default_gateways:
-        issues.append({"code": "NET_NO_GATEWAY", "severity": "high", "title": "No default gateway detected", "evidence": ["Windows did not report a default gateway"]})
+        issues.append({"code": "NET_NO_GATEWAY", "severity": "high", "title": "No default gateway detected", "evidence": ["Windows did not report a default gateway"], "safe_actions": ["renew_dhcp"]})
     gp = (s.internet or {}).get("gateway_ping") or {}
     dns = (s.internet or {}).get("dns") or {}
     if s.default_gateways and gp.get("ok") is False:
-        issues.append({"code": "NET_GATEWAY_UNREACHABLE", "severity": "high", "title": "Default gateway is not responding", "evidence": [str(gp)]})
+        issues.append({"code": "NET_GATEWAY_UNREACHABLE", "severity": "high", "title": "Default gateway is not responding", "evidence": [str(gp)], "safe_actions": ["renew_dhcp"]})
     if dns.get("ok") is False:
-        issues.append({"code": "NET_DNS_FAILURE", "severity": "medium", "title": "DNS resolution probe failed", "evidence": [str(dns)]})
+        issues.append({"code": "NET_DNS_FAILURE", "severity": "medium", "title": "DNS resolution probe failed", "evidence": [str(dns)], "safe_actions": ["flush_dns"]})
     if s.proxy.get("enabled"):
         issues.append({"code": "NET_WINHTTP_PROXY", "severity": "medium", "title": "A WinHTTP proxy is configured", "evidence": ["A proxy can be intentional; verify it before changing it"], "safe_actions": ["review_proxy"]})
     return issues
@@ -177,7 +186,6 @@ def repair(action: str) -> dict[str, Any]:
         "renew_dhcp": ["ipconfig", "/renew"],
         "reset_winsock": ["netsh", "winsock", "reset"],
         "reset_tcpip": ["netsh", "int", "ip", "reset"],
-        "release_renew": ["ipconfig", "/renew"],
     }
     if action not in allowed:
         raise ValueError(f"Unsupported network repair: {action}")
@@ -186,12 +194,9 @@ def repair(action: str) -> dict[str, Any]:
 
 
 def recommended_repairs(issues: list[dict[str, Any]]) -> list[str]:
-    codes = {x.get("code") for x in issues}
     actions: list[str] = []
-    if "NET_DNS_FAILURE" in codes:
-        actions.append("flush_dns")
-    if "NET_NO_GATEWAY" in codes:
-        actions.append("renew_dhcp")
-    if "NET_GATEWAY_UNREACHABLE" in codes:
-        actions.extend(["renew_dhcp", "reset_winsock"])
+    for issue in issues:
+        for action in issue.get("safe_actions", []):
+            if action in {"flush_dns", "renew_dhcp", "reset_winsock", "reset_tcpip"}:
+                actions.append(action)
     return list(dict.fromkeys(actions))
