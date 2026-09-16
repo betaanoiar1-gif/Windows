@@ -35,14 +35,14 @@ class Engine:
         candidates = authorize_all(scan_temp(self.settings.max_scan_files), auto=False)
         diagnoses = diagnose(current, history[:-1])
         net = network_snapshot(probes=network_probes)
-        net_issues = diagnose_network(net)
-        net_health = evaluate_network_health(net)
         connectivity = None
         advanced_network = None
         if network_probes:
             connectivity = diagnose_connectivity(dns_probe(), https_probe())
             gateway = net.default_gateways[0] if net.default_gateways else None
             advanced_network = advanced_snapshot(default_gateway=gateway, probes=True)
+        net_issues = diagnose_network(net, connectivity=connectivity)
+        net_health = evaluate_network_health(net, connectivity=connectivity)
         payload = {
             "system": current.to_dict(),
             "health_score": health_score(current, diagnoses),
@@ -81,8 +81,6 @@ class Engine:
 
     def network_inspect(self, probes=True):
         net = network_snapshot(probes=probes)
-        issues = diagnose_network(net)
-        health = evaluate_network_health(net)
         connectivity = None
         advanced_network = None
         process_network = connection_inventory() if probes else None
@@ -90,12 +88,14 @@ class Engine:
             connectivity = diagnose_connectivity(dns_probe(), https_probe())
             gateway = net.default_gateways[0] if net.default_gateways else None
             advanced_network = advanced_snapshot(default_gateway=gateway, probes=True)
-        plan = diagnose_and_plan(probes=probes)
+        issues = diagnose_network(net, connectivity=connectivity)
+        health = evaluate_network_health(net, connectivity=connectivity)
+        plan = [step.to_dict() for step in __import__("smartpc.network_recovery", fromlist=["build_plan"]).build_plan(issues)]
         return {
             "network": net, "health": health, "connectivity": connectivity,
             "advanced": advanced_network, "process_network": process_network,
             "diagnoses": issues, "recommended_repairs": recommended_repairs(issues),
-            "recovery_plan": plan["plan"],
+            "recovery_plan": plan,
         }
 
     def network_repair(self, action: str, confirm_medium=False, verify=True):
