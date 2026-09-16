@@ -29,28 +29,40 @@ def _value(probe: dict[str, Any] | None, key: str) -> float | None:
         return None
 
 
-def evaluate(current, previous=None, interval_seconds: float = 1.0) -> NetworkHealth:
+def evaluate(current, previous=None, interval_seconds: float = 1.0, connectivity: Any = None) -> NetworkHealth:
+    """Score health from layered evidence; gateway ICMP failure is not treated as outage when HTTPS works."""
     active = sum(1 for item in current.interfaces if item.get("is_up") and item.get("addresses"))
     gateway = (current.internet or {}).get("gateway_ping") or {}
     dns = (current.internet or {}).get("dns") or {}
     loss = _value(gateway, "packet_loss_percent")
     glat = _value(gateway, "avg_latency_ms")
     dlat = _value(dns, "latency_ms")
+    https_ok = getattr(connectivity, "https_ok", None)
     score = 100.0
     evidence: list[str] = []
     if active == 0:
-        score -= 80; evidence.append("No active interface with an IP address")
+        score -= 80
+        evidence.append("No active interface with an IP address")
     if not current.default_gateways:
-        score -= 35; evidence.append("No default gateway")
-    if gateway.get("ok") is False:
-        score -= 35; evidence.append("Default gateway probe failed")
+        score -= 35
+        evidence.append("No default gateway")
+    gateway_icmp_failed = gateway.get("ok") is False
+    if gateway_icmp_failed:
+        if https_ok is True:
+            evidence.append("Default gateway did not answer ICMP; external HTTPS connectivity is working")
+        else:
+            score -= 35
+            evidence.append("Default gateway ICMP probe failed")
     if dns.get("ok") is False:
-        score -= 25; evidence.append("DNS probe failed")
-    if loss is not None:
+        score -= 25
+        evidence.append("DNS probe failed")
+    if loss is not None and not (gateway_icmp_failed and https_ok is True):
         score -= min(35, loss * 0.8)
-        if loss > 5: evidence.append(f"Gateway packet loss {loss:.1f}%")
+        if loss > 5:
+            evidence.append(f"Gateway packet loss {loss:.1f}%")
     if glat is not None and glat > 100:
-        score -= min(15, (glat - 100) / 20); evidence.append(f"High gateway latency {glat:.1f} ms")
+        score -= min(15, (glat - 100) / 20)
+        evidence.append(f"High gateway latency {glat:.1f} ms")
     if current.proxy.get("enabled"):
         evidence.append("WinHTTP proxy is configured; it may be intentional")
     if previous is not None:
