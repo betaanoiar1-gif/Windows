@@ -10,6 +10,7 @@ def main():
     p.add_argument("--background", action="store_true", help="observe only; no cleanup or network repair")
     p.add_argument("--inspect", action="store_true")
     p.add_argument("--network", action="store_true", help="inspect network health with real probes")
+    p.add_argument("--network-plan", action="store_true", help="diagnose network and build a safe recovery plan")
     p.add_argument("--network-repair", choices=["flush_dns", "renew_dhcp", "reset_winsock", "reset_tcpip"], help="run one explicit network repair and verify it")
     p.add_argument("--optimize-safe", action="store_true")
     p.add_argument("--restore", metavar="TOKEN")
@@ -31,6 +32,9 @@ def main():
         print(engine.restore(args.restore)); return 0
     if args.network_repair:
         print(json.dumps(engine.network_repair(args.network_repair), ensure_ascii=False, indent=2, default=str)); return 0
+    if args.network_plan:
+        from smartpc.network_recovery import diagnose_and_plan
+        print(json.dumps(diagnose_and_plan(), ensure_ascii=False, indent=2)); return 0
     if args.network:
         r = engine.network_inspect()
         print(json.dumps({"network": r["network"].to_dict(), "diagnoses": r["diagnoses"], "recommended_repairs": r["recommended_repairs"]}, ensure_ascii=False, indent=2)); return 0
