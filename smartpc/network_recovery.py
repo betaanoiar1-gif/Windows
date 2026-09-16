@@ -17,25 +17,16 @@ class RecoveryStep:
         return asdict(self)
 
 
-RISK = {
-    "flush_dns": "safe",
-    "renew_dhcp": "low",
-    "reset_winsock": "medium",
-    "reset_tcpip": "medium",
-    "release_renew": "low",
-}
+RISK = {"flush_dns": "safe", "renew_dhcp": "low", "reset_winsock": "medium", "reset_tcpip": "medium"}
 
 
 def build_plan(issues: list[dict[str, Any]]) -> list[RecoveryStep]:
-    steps = []
+    steps: list[RecoveryStep] = []
     for action in recommended_repairs(issues):
         reasons = [i.get("title", "") for i in issues if action in i.get("safe_actions", [])]
-        if action == "flush_dns":
-            reasons.append("DNS probe failed")
-        elif action == "renew_dhcp":
-            reasons.append("Gateway/address configuration may be stale")
-        elif action == "reset_winsock":
-            reasons.append("Gateway connectivity remains unhealthy after basic recovery")
+        if action == "flush_dns": reasons.append("DNS probe failed")
+        elif action == "renew_dhcp": reasons.append("Gateway/address configuration may be stale")
+        elif action == "reset_winsock": reasons.append("Basic recovery may not have restored gateway connectivity")
         steps.append(RecoveryStep(action, "; ".join(dict.fromkeys(x for x in reasons if x)), RISK[action], action in {"reset_winsock", "reset_tcpip"}))
     return steps
 
@@ -64,8 +55,11 @@ def verify_recovery(before: dict[str, Any], probes: bool = True) -> dict[str, An
     after = snapshot(probes=probes)
     before_gateway = ((before.get("internet") or {}).get("gateway_ping") or {})
     after_gateway = ((after.internet or {}).get("gateway_ping") or {})
+    before_dns = ((before.get("internet") or {}).get("dns") or {})
+    after_dns = ((after.internet or {}).get("dns") or {})
     return {
         "after": after.to_dict(),
         "gateway_changed_to_ok": before_gateway.get("ok") is not True and after_gateway.get("ok") is True,
+        "dns_changed_to_ok": before_dns.get("ok") is not True and after_dns.get("ok") is True,
         "issues_after": diagnose(after),
     }
