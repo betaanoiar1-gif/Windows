@@ -8,8 +8,9 @@ from .learning import Baseline
 from .monitor import snapshot
 from .network import snapshot as network_snapshot, diagnose as diagnose_network, recommended_repairs, repair as repair_network
 from .network_diagnostics import dns_probe, https_probe, diagnose_connectivity
+from .network_advanced import advanced_snapshot
 from .network_health import evaluate as evaluate_network_health
-from .network_recovery import diagnose_and_plan, verify_recovery
+from .network_recovery import diagnose_and_plan
 from .safety import authorize_all
 from .storage import safe_quarantine, scan_temp
 
@@ -33,10 +34,13 @@ class Engine:
         net_issues = diagnose_network(net)
         net_health = evaluate_network_health(net)
         connectivity = None
+        advanced_network = None
         if network_probes:
             dprobe = dns_probe()
             hprobe = https_probe()
             connectivity = diagnose_connectivity(dprobe, hprobe)
+            gateway = net.default_gateways[0] if net.default_gateways else None
+            advanced_network = advanced_snapshot(default_gateway=gateway, probes=True)
         payload = {
             "system": current.to_dict(),
             "health_score": health_score(current, diagnoses),
@@ -45,12 +49,19 @@ class Engine:
             "network": net.to_dict(),
             "network_health": net_health.to_dict(),
             "network_connectivity": connectivity.to_dict() if connectivity else None,
+            "network_advanced": advanced_network,
             "network_diagnoses": net_issues,
             "network_recommended_repairs": recommended_repairs(net_issues),
             "candidates": [{"candidate_id": str(i), **c.to_dict()} for i, c in enumerate(candidates)]
         }
         ai = self.ai.analyze(payload) if include_ai else {"mode": "disabled", "actions": []}
-        return {"snapshot": current, "candidates": candidates, "diagnoses": diagnoses, "health_score": payload["health_score"], "baseline": payload["baseline"], "network": net, "network_health": net_health, "network_connectivity": connectivity, "network_diagnoses": net_issues, "network_recommended_repairs": payload["network_recommended_repairs"], "ai": ai}
+        return {
+            "snapshot": current, "candidates": candidates, "diagnoses": diagnoses,
+            "health_score": payload["health_score"], "baseline": payload["baseline"],
+            "network": net, "network_health": net_health, "network_connectivity": connectivity,
+            "network_advanced": advanced_network, "network_diagnoses": net_issues,
+            "network_recommended_repairs": payload["network_recommended_repairs"], "ai": ai
+        }
 
     def optimize_safe(self):
         before = snapshot()
@@ -69,10 +80,17 @@ class Engine:
         issues = diagnose_network(net)
         health = evaluate_network_health(net)
         connectivity = None
+        advanced_network = None
         if probes:
             connectivity = diagnose_connectivity(dns_probe(), https_probe())
+            gateway = net.default_gateways[0] if net.default_gateways else None
+            advanced_network = advanced_snapshot(default_gateway=gateway, probes=True)
         plan = diagnose_and_plan(probes=probes)
-        return {"network": net, "health": health, "connectivity": connectivity, "diagnoses": issues, "recommended_repairs": recommended_repairs(issues), "recovery_plan": plan["plan"]}
+        return {
+            "network": net, "health": health, "connectivity": connectivity,
+            "advanced": advanced_network, "diagnoses": issues,
+            "recommended_repairs": recommended_repairs(issues), "recovery_plan": plan["plan"]
+        }
 
     def network_repair(self, action: str, confirm_medium=False, verify=True):
         before = self.network_inspect(probes=True)
@@ -85,7 +103,14 @@ class Engine:
         if after is not None:
             before_score = before["health"].score
             after_score = after["health"].score
-            verification = {"health_score_before": before_score, "health_score_after": after_score, "improved": after_score > before_score, "remaining_issues": after["diagnoses"]}
+            verification = {
+                "health_score_before": before_score,
+                "health_score_after": after_score,
+                "improved": after_score > before_score,
+                "unchanged": after_score == before_score,
+                "remaining_issues": after["diagnoses"],
+                "advanced_after": after.get("advanced"),
+            }
         self.db.action(dt.datetime.now(dt.timezone.utc).isoformat(), f"network:{action}", "network", "ok" if result["ok"] else "failed")
         return {"before": before, "result": result, "after": after, "verification": verification}
 
