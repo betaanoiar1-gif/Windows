@@ -39,14 +39,16 @@ def _run(args: list[str], timeout: int = 10) -> tuple[int, str, str]:
 def https_probe(url: str, timeout: float = 5.0) -> ProbeResult:
     """Bounded HTTPS GET. HTTP errors still prove that TLS/HTTP transport reached the host."""
     started = time.perf_counter()
-    request = urllib.request.Request(url, method="GET", headers={"User-Agent": "SMARTPC-AI/0.1"})
     try:
+        timeout = max(0.5, min(15.0, float(timeout)))
+        request = urllib.request.Request(url, method="GET", headers={"User-Agent": "SMARTPC-AI/0.1"})
         with urllib.request.urlopen(request, timeout=timeout) as response:
             response.read(1)
-            return ProbeResult(url, True, round((time.perf_counter() - started) * 1000, 2), response.status)
+            status = int(getattr(response, "status", response.getcode()))
+            return ProbeResult(url, 200 <= status < 500, round((time.perf_counter() - started) * 1000, 2), status)
     except urllib.error.HTTPError as exc:
         return ProbeResult(url, True, round((time.perf_counter() - started) * 1000, 2), exc.code)
-    except (urllib.error.URLError, TimeoutError, OSError) as exc:
+    except (urllib.error.URLError, TimeoutError, OSError, ValueError, TypeError) as exc:
         return ProbeResult(url, False, round((time.perf_counter() - started) * 1000, 2), error=str(exc))
 
 
@@ -59,7 +61,6 @@ def multi_https_probe(urls: tuple[str, ...] = (
 
 
 def _parse_key_values(text: str) -> dict[str, str]:
-    """Parse localized netsh output without depending on translated value text."""
     result: dict[str, str] = {}
     for line in text.splitlines():
         if ":" not in line:
@@ -74,9 +75,8 @@ def _parse_key_values(text: str) -> dict[str, str]:
 
 def _first_value(fields: dict[str, str], *names: str) -> str | None:
     for name in names:
-        value = fields.get(name.lower())
-        if value:
-            return value
+        if fields.get(name.lower()):
+            return fields[name.lower()]
     return None
 
 
@@ -93,7 +93,6 @@ def _number(value: str | None) -> float | None:
 
 
 def parse_wifi_interfaces(text: str) -> list[dict[str, Any]]:
-    """Parse the interface section of netsh output using numeric evidence where possible."""
     blocks = re.split(r"\n\s*\n", text.strip()) if text.strip() else []
     results: list[dict[str, Any]] = []
     for block in blocks:
@@ -108,49 +107,33 @@ def parse_wifi_interfaces(text: str) -> list[dict[str, Any]]:
         rx = _number(_first_value(fields, "receive rate (mbps)", "vitesse de réception (mbits/s)"))
         tx = _number(_first_value(fields, "transmit rate (mbps)", "vitesse de transmission (mbits/s)"))
         if any(x is not None for x in (ssid, signal, channel, radio, rx, tx)) or state:
-            results.append({
-                "state": state,
-                "ssid": ssid,
-                "signal_percent": signal,
-                "channel": int(channel) if channel is not None else None,
-                "radio_type": radio,
-                "receive_rate_mbps": rx,
-                "transmit_rate_mbps": tx,
-            })
+            results.append({"state": state, "ssid": ssid, "signal_percent": signal, "channel": int(channel) if channel is not None else None, "radio_type": radio, "receive_rate_mbps": rx, "transmit_rate_mbps": tx})
     return results
 
 
 def wifi_diagnostics(runner: CommandRunner | None = None) -> dict[str, Any]:
-    """Read-only Wi-Fi state/driver information; no adapter changes are performed."""
     run = runner or _run
     state_rc, state_out, state_err = run(["netsh", "wlan", "show", "interfaces"], 10)
     driver_rc, driver_out, driver_err = run(["netsh", "wlan", "show", "drivers"], 10)
-    return {
-        "available": state_rc == 0,
-        "interfaces": parse_wifi_interfaces(state_out),
-        "interfaces_raw": state_out[-6000:],
-        "drivers_raw": driver_out[-8000:],
-        "command_errors": [x for x in (state_err, driver_err) if x],
-        "driver_query_ok": driver_rc == 0,
-    }
+    return {"available": state_rc == 0, "interfaces": parse_wifi_interfaces(state_out), "interfaces_raw": state_out[-6000:], "drivers_raw": driver_out[-8000:], "command_errors": [x for x in (state_err, driver_err) if x], "driver_query_ok": driver_rc == 0}
 
 
 def dns_latency(host: str, timeout: float = 3.0) -> ProbeResult:
     started = time.perf_counter()
-    old = socket.getdefaulttimeout()
-    socket.setdefaulttimeout(timeout)
     try:
-        ok = bool(socket.getaddrinfo(host, 443, type=socket.SOCK_STREAM))
+        timeout = max(0.5, min(10.0, float(timeout)))
+        old = socket.getdefaulttimeout()
+        socket.setdefaulttimeout(timeout)
+        try:
+            ok = bool(socket.getaddrinfo(host, 443, type=socket.SOCK_STREAM))
+        finally:
+            socket.setdefaulttimeout(old)
         return ProbeResult(host, ok, round((time.perf_counter() - started) * 1000, 2))
-    except OSError as exc:
+    except (OSError, ValueError, TypeError) as exc:
         return ProbeResult(host, False, round((time.perf_counter() - started) * 1000, 2), error=str(exc))
-    finally:
-        socket.setdefaulttimeout(old)
 
 
-def compare_dns_hosts(hosts: tuple[str, ...] = (
-    "www.microsoft.com", "www.cloudflare.com", "www.google.com"
-)) -> list[ProbeResult]:
+def compare_dns_hosts(hosts: tuple[str, ...] = ("www.microsoft.com", "www.cloudflare.com", "www.google.com")) -> list[ProbeResult]:
     return [dns_latency(host) for host in hosts]
 
 
@@ -160,21 +143,17 @@ def _ping_payload(host: str, size: int, runner: CommandRunner | None = None) -> 
     return rc == 0
 
 
-def mtu_probe(
-    host: str,
-    payload_sizes: tuple[int, ...] | None = None,
-    runner: CommandRunner | None = None,
-) -> dict[str, Any]:
+def mtu_probe(host: str, payload_sizes: tuple[int, ...] | None = None, runner: CommandRunner | None = None) -> dict[str, Any]:
     """Read-only IPv4 DF probe. Estimates the largest successful payload; never changes MTU."""
     if payload_sizes is not None:
         sizes = tuple(sorted({max(576, min(1472, int(x))) for x in payload_sizes}, reverse=True))
         results = [{"payload_bytes": size, "ok": _ping_payload(host, size, runner)} for size in sizes]
         largest = max((x["payload_bytes"] for x in results if x["ok"]), default=None)
-        return {"host": host, "samples": results, "largest_successful_payload": largest, "mtu_estimate": largest + 28 if largest else None, "method": "sampled_df_ping"}
+        return {"host": host, "samples": results, "largest_successful_payload": largest, "mtu_estimate": largest + 28 if largest is not None else None, "method": "sampled_df_ping"}
 
     low, high = 576, 1472
     samples: list[dict[str, Any]] = []
-    while low <= high and len(samples) < 8:
+    while low <= high and len(samples) < 12:
         mid = (low + high) // 2
         ok = _ping_payload(host, mid, runner)
         samples.append({"payload_bytes": mid, "ok": ok})
@@ -183,35 +162,16 @@ def mtu_probe(
         else:
             high = mid - 1
     largest = max((x["payload_bytes"] for x in samples if x["ok"]), default=None)
-    return {
-        "host": host,
-        "samples": samples,
-        "largest_successful_payload": largest,
-        "mtu_estimate": largest + 28 if largest else None,
-        "method": "binary_search_df_ping",
-        "recommendation": "diagnostic evidence only; do not change MTU automatically",
-    }
+    return {"host": host, "samples": samples, "largest_successful_payload": largest, "mtu_estimate": largest + 28 if largest is not None else None, "method": "binary_search_df_ping", "recommendation": "diagnostic evidence only; do not change MTU automatically"}
 
 
 def summarize_https(results: list[ProbeResult]) -> dict[str, Any]:
     successful = [r for r in results if r.ok]
-    failed = [r for r in results if not r.ok]
-    return {
-        "targets": len(results),
-        "successful": len(successful),
-        "failed": len(failed),
-        "reachable": bool(successful),
-        "consistent_failure": bool(results) and not successful,
-        "latencies_ms": [r.latency_ms for r in successful if r.latency_ms is not None],
-    }
+    return {"targets": len(results), "successful": len(successful), "failed": len(results) - len(successful), "reachable": bool(successful), "consistent_failure": bool(results) and not successful, "latencies_ms": [r.latency_ms for r in successful if r.latency_ms is not None]}
 
 
 def advanced_snapshot(default_gateway: str | None = None, probes: bool = True) -> dict[str, Any]:
-    """Collect advanced read-only evidence in one bounded call."""
-    result: dict[str, Any] = {
-        "https": [], "https_summary": summarize_https([]), "dns": [],
-        "wifi": wifi_diagnostics(), "mtu": None,
-    }
+    result: dict[str, Any] = {"https": [], "https_summary": summarize_https([]), "dns": [], "wifi": wifi_diagnostics(), "mtu": None}
     if not probes:
         return result
     https_results = multi_https_probe()
