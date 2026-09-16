@@ -1,38 +1,66 @@
 # SMARTPC AI
 
-Autonomous Windows optimization laboratory. The project is deliberately safety-first: AI never receives direct shell/system authority, destructive operations are blocked by a local safety layer, and cleanup uses quarantine rather than irreversible deletion.
+Safety-first Windows optimization laboratory and desktop application.
 
-## Current architecture
+## What it does
 
-- Real CPU/RAM/disk/process telemetry via `psutil`.
-- Temporary-file discovery.
-- Protected Windows/application paths.
-- Dry inspection with no changes.
-- Reversible quarantine for automatic cleanup.
-- SQLite history of snapshots/actions.
-- Provider-neutral OpenAI-compatible AI adapter (disabled until configured).
-- PySide6 desktop UI.
-- Windows GitHub Actions test gate.
+The runtime follows:
 
-## Run
+`OBSERVE → DIAGNOSE → PROPOSE → SAFETY CHECK → QUARANTINE → MEASURE → LEARN`
+
+- Real CPU, RAM, disk, network and process telemetry through `psutil`.
+- Read-only startup inventory on Windows.
+- Deterministic threshold/anomaly diagnostics against the device's own recent baseline.
+- Temporary-file discovery with scan limits and reparse/symlink avoidance.
+- Protected Windows/application roots.
+- Reversible quarantine with an append-only JSONL manifest and restore command.
+- SQLite history for measurements and actions.
+- Optional provider-neutral OpenAI-compatible AI advisory layer.
+- AI output is schema-validated and cannot authorize arbitrary commands, registry edits, service changes, process termination, or permanent deletion.
+- Explicit Windows logon task controls; the task is observation-only by default.
+- Disposable test-lab fixture generator.
+- Windows CI test gate.
+
+## Cloud-first test plan
+
+Use a disposable Windows VM first (Azure is suitable). Clone this repository, install Python 3.12, then run the local tests and CLI inspection. Keep the AI key out of Git and configure it only inside the disposable VM after the provider's endpoint/model contract has been verified.
 
 ```powershell
 py -3.12 -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install -r requirements.txt
-python main.py
+pytest -q
+python main.py --inspect
 ```
 
-## Safety
+The GUI is available with `python main.py`.
 
-The first test phase must use a disposable Windows VM. Do not put an API key in source control. Copy `.env.example` to `.env` only in the test environment or use environment variables/secrets.
+## Safe operations
 
-The current cleanup mode moves approved temporary files into the local `quarantine/` directory. It does not permanently delete them.
+`python main.py --optimize-safe` can move only locally-authorized temporary files into the application's quarantine directory. It does not permanently delete them. Restore with:
+
+```powershell
+python main.py --restore TOKEN
+```
+
+Install observation at logon only when explicitly requested:
+
+```powershell
+python main.py --install-startup
+python main.py --startup-status
+python main.py --remove-startup
+```
 
 ## AI configuration
 
-AI is intentionally off until the cloud laboratory phase. Set `AI_API_KEY`, `AI_BASE_URL`, and `AI_MODEL` only after the exact provider contract is verified. AI output is advisory and must pass local safety validation before any action.
+Copy `.env.example` to `.env` in the disposable test environment or use environment variables:
 
-## Development rule
+- `AI_API_KEY`
+- `AI_BASE_URL`
+- `AI_MODEL`
 
-No optimization is considered successful without a measurable before/after result. No registry tweak, service disablement, process termination, or personal-file deletion is enabled by default.
+No AI key is required for telemetry, diagnostics, scanning, quarantine, history, or tests.
+
+## Safety contract
+
+No optimization is considered successful without measurable before/after evidence. The default system does not modify the registry, disable services, terminate processes, change drivers, or permanently delete personal files. AI is advisory; local deterministic policy is authoritative.
