@@ -3,7 +3,7 @@ import sys
 from PySide6.QtWidgets import QApplication, QHBoxLayout, QMainWindow, QVBoxLayout, QLabel, QPushButton, QTextEdit, QWidget
 
 from .engine import Engine
-from .windows import install_startup_task, remove_startup_task
+from .windows import install_startup_task, maintenance_status, remove_startup_task, startup_status
 
 
 class MainWindow(QMainWindow):
@@ -14,12 +14,12 @@ class MainWindow(QMainWindow):
         self.engine = Engine()
         root = QWidget()
         layout = QVBoxLayout(root)
-        self.status = QLabel("Ready — autonomous safe maintenance available; AI is optional")
+        self.status = QLabel(self._startup_text())
         self.output = QTextEdit()
         self.output.setReadOnly(True)
 
         row1 = QHBoxLayout()
-        for label, handler in (("Analyze System", self.inspect), ("Deep C: Scan", self.deep_scan), ("Diagnose Network", self.network), ("Show Repair Plan", self.network_plan), ("Safe Optimize", self.optimize)):
+        for label, handler in (("Analyze System", self.inspect), ("Deep C: Scan", self.deep_scan), ("Diagnose Network", self.network), ("Show Repair Plan", self.network_plan), ("Safe Optimize", self.optimize), ("Run Autonomous Cycle", self.maintenance)):
             button = QPushButton(label)
             button.clicked.connect(handler)
             row1.addWidget(button)
@@ -31,6 +31,13 @@ class MainWindow(QMainWindow):
         for item in (self.status, row1, row2, self.output):
             layout.addWidget(item)
         self.setCentralWidget(root)
+
+    @staticmethod
+    def _startup_text():
+        try:
+            return f"Autonomous startup: {'ON' if startup_status() else 'OFF'} | 30-minute maintenance: {'ON' if maintenance_status() else 'OFF'} | AI optional"
+        except Exception:
+            return "Ready — autonomous safe maintenance available; AI is optional"
 
     def _show_error(self, prefix, exc):
         self.status.setText(prefix)
@@ -120,10 +127,33 @@ class MainWindow(QMainWindow):
         except Exception as exc:
             self._show_error("Optimization failed safely", exc)
 
+    def maintenance(self):
+        try:
+            r = self.engine.autonomous_maintenance()
+            p, pred, after = r["pressure_before"], r["prediction"], r["pressure_after"]
+            lines = [
+                "AUTONOMOUS MAINTENANCE",
+                "",
+                f"Trigger: {'YES' if r['triggered'] else 'NO'}",
+                f"C: free before {p['free_gb']:.2f} GB ({p['free_percent']:.1f}%)",
+                f"Prediction: {pred['reason']}",
+                f"Measured consumption: {pred['rate_gb_per_hour']:.3f} GB/hour",
+                f"Projected free space: {pred['projected_free_gb'] if pred['projected_free_gb'] is not None else 'n/a'} GB",
+                f"Quarantined: {len(r['moved'])} file(s)",
+                f"C: free after {after['free_gb']:.2f} GB ({after['free_percent']:.1f}%)",
+            ]
+            if r["skipped_reason"]:
+                lines += ["", f"Skipped/rollback reason: {r['skipped_reason']}"]
+            lines += ["", "Only reversible temporary-file quarantine is permitted in unattended mode."]
+            self.status.setText("Autonomous cycle complete")
+            self.output.setPlainText("\n".join(lines))
+        except Exception as exc:
+            self._show_error("Autonomous maintenance failed safely", exc)
+
     def install_startup(self):
         try:
             install_startup_task()
-            self.status.setText("Autonomous startup + 30-minute maintenance installed")
+            self.status.setText(self._startup_text())
             self.output.setPlainText("SMARTPC AI will observe at Windows logon and run bounded safe maintenance every 30 minutes.\n\nAutomatic mutation is limited to reversible temporary-file quarantine when the system drive is under pressure.\nNetwork repairs, registry changes, service changes, driver changes and permanent deletion remain manual.")
         except Exception as exc:
             self._show_error("Autonomous startup installation failed", exc)
@@ -131,7 +161,8 @@ class MainWindow(QMainWindow):
     def remove_startup(self):
         try:
             remove_startup_task()
-            self.status.setText("Autonomous startup + maintenance removed/requested")
+            self.status.setText(self._startup_text())
+            self.output.setPlainText("Autonomous startup and scheduled maintenance were removed/requested.")
         except Exception as exc:
             self._show_error("Startup removal failed", exc)
 
