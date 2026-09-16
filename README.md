@@ -23,21 +23,40 @@ The platform is designed so AI can reason about evidence but cannot directly exe
 - Disposable test-lab fixture generator.
 - Windows CI test gate.
 
-## Network Intelligence & Repair
+## Network Intelligence & Self-Healing
 
-The network subsystem is a first-class diagnostic layer, not a cosmetic "internet booster". It collects real Windows/OS measurements and separates LAN, DNS and internet symptoms.
+The network subsystem is a first-class diagnostic and recovery layer, not a cosmetic "internet booster". It collects real Windows/OS measurements and separates LAN, DNS and internet symptoms.
 
-It can inspect:
+### Observation
 
-- active adapters, addresses, link state, speed and MTU;
+- active adapters, addresses, link state, reported speed and MTU;
 - default gateway and gateway reachability;
 - DNS servers and real DNS-resolution probes;
 - WinHTTP proxy state;
-- packet loss and latency through bounded Windows ping probes;
+- bounded Windows ping probes with packet-loss/latency extraction;
 - network byte/packet counters;
-- evidence-based failure categories and safe repair recommendations.
+- network health score and stability indicators.
 
-Supported **explicit** repairs are:
+### Diagnosis
+
+The system distinguishes conditions such as no active interface, missing gateway, unreachable gateway, DNS failure and configured proxy. A configured proxy is treated as potentially intentional and is not automatically removed.
+
+### Recovery planner
+
+The planner selects the least-disruptive supported action for the observed evidence:
+
+- `flush_dns` — safe cache refresh;
+- `renew_dhcp` — refresh address/gateway configuration;
+- `reset_winsock` — disruptive recovery for persistent connectivity problems;
+- `reset_tcpip` — disruptive TCP/IP recovery when explicitly selected.
+
+A recovery plan can be inspected without executing it:
+
+```powershell
+python main.py --network-plan
+```
+
+Explicit individual repairs:
 
 ```powershell
 python main.py --network-repair flush_dns
@@ -46,7 +65,7 @@ python main.py --network-repair reset_winsock
 python main.py --network-repair reset_tcpip
 ```
 
-Every repair returns its command result and can perform a post-repair verification probe. Winsock/TCP-IP reset actions are treated as disruptive and may require a reboot. They are never part of silent startup optimization.
+Repairs return command results and post-repair evidence. Winsock/TCP-IP resets are treated as disruptive and may require a reboot. They are never part of silent startup optimization.
 
 Inspect network health without changing anything:
 
@@ -70,6 +89,7 @@ py -3.12 -m venv .venv
 python -m pip install -r requirements.txt
 pytest -q
 python main.py --network
+python main.py --network-plan
 python main.py --inspect
 ```
 
