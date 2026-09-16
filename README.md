@@ -6,104 +6,87 @@ Safety-first Windows optimization laboratory and desktop application.
 
 `OBSERVE → DIAGNOSE → PROPOSE → SAFETY CHECK → SIMULATE → EXECUTE → MEASURE → VERIFY → LEARN`
 
-The platform is designed so AI can reason about evidence but cannot directly execute arbitrary system commands. Local deterministic policy and the safety engine remain authoritative.
+AI is advisory only. Local deterministic policy and the safety engine remain authoritative over every system-changing operation.
 
-## What it does
+## Current capabilities
 
-- Real CPU, RAM, disk, network and process telemetry through `psutil`.
+- Real CPU, RAM, disk, process and network telemetry through `psutil`.
+- Device-specific baseline and deterministic anomaly diagnostics.
 - Read-only Windows startup inventory.
-- Device-specific baselines and deterministic anomaly diagnostics.
-- Temporary-file discovery with scan limits and reparse/symlink avoidance.
+- Temporary-file discovery with bounded scans and reparse/symlink avoidance.
 - Protected Windows/application roots.
-- Reversible quarantine with an append-only JSONL manifest and restore command.
-- SQLite history for measurements and actions.
-- Optional provider-neutral OpenAI-compatible AI advisory layer.
-- Schema-validated AI output; AI cannot authorize arbitrary commands, registry edits, service changes, process termination, or permanent deletion.
-- Explicit Windows logon task controls; startup observation is read-only by default.
-- Disposable test-lab fixture generator.
-- Windows CI test gate.
+- Reversible quarantine with restore support; no permanent deletion.
+- SQLite history for snapshots and actions.
+- Optional provider-neutral OpenAI-compatible AI advisory layer with strict candidate/action validation.
+- Explicit Windows logon observation task controls.
+- Disposable lab fixture generator.
+- Unified Windows CI regression suite plus offline CLI smoke test.
 
-## Network Intelligence & Self-Healing
+## Network Intelligence & Recovery
 
-The network subsystem is a first-class diagnostic and recovery layer, not a cosmetic "internet booster". It collects real Windows/OS measurements and separates LAN, DNS and internet symptoms.
+The network subsystem diagnoses real connectivity layers rather than claiming to "boost" internet speed. It is designed to identify evidence-backed causes and recommend the least disruptive supported recovery.
 
-### Observation
+### Read-only evidence
 
 - active adapters, addresses, link state, reported speed and MTU;
-- default gateway and gateway reachability;
-- DNS servers and real DNS-resolution probes;
-- WinHTTP proxy state;
-- bounded Windows ping probes with packet-loss/latency extraction;
-- network byte/packet counters;
-- network health score and stability indicators.
+- default gateway and bounded gateway ping;
+- configured DNS servers and DNS-resolution latency;
+- multiple independent HTTPS GET probes;
+- Wi-Fi state, SSID, signal, channel, radio type and link rates when Windows exposes them;
+- WinHTTP proxy state, treated as potentially intentional;
+- bounded IPv4 DF-ping MTU sampling/binary search;
+- network byte/packet counters and health/stability indicators.
 
-### Diagnosis
+Wi-Fi parsing accepts common English and French Windows labels and retains raw command output for evidence. MTU diagnostics never change the adapter MTU.
 
-The system distinguishes conditions such as no active interface, missing gateway, unreachable gateway, DNS failure and configured proxy. A configured proxy is treated as potentially intentional and is not automatically removed.
+### Recovery
 
-### Recovery planner
+Supported explicit actions are:
 
-The planner selects the least-disruptive supported action for the observed evidence:
+- `flush_dns` — refresh DNS cache;
+- `renew_dhcp` — refresh DHCP configuration;
+- `reset_winsock` — disruptive Winsock reset;
+- `reset_tcpip` — disruptive TCP/IP reset.
 
-- `flush_dns` — safe cache refresh;
-- `renew_dhcp` — refresh address/gateway configuration;
-- `reset_winsock` — disruptive recovery for persistent connectivity problems;
-- `reset_tcpip` — disruptive TCP/IP recovery when explicitly selected.
+Recovery plans are generated from observed evidence. Medium-risk actions require explicit confirmation; administrator-required operations are blocked without elevation. Unsupported or tampered recovery actions are rejected. Every successful repair can be re-probed and compared with before/after health evidence.
 
-A recovery plan can be inspected without executing it:
+Inspect without changes:
 
 ```powershell
+python main.py --network
 python main.py --network-plan
+python main.py --inspect --no-ai
 ```
 
-Explicit individual repairs:
+For deterministic/offline diagnostics and CI:
+
+```powershell
+python main.py --inspect --no-ai --no-network-probes
+```
+
+Explicit repairs:
 
 ```powershell
 python main.py --network-repair flush_dns
 python main.py --network-repair renew_dhcp
-python main.py --network-repair reset_winsock
-python main.py --network-repair reset_tcpip
+python main.py --network-repair reset_winsock --confirm
+python main.py --network-repair reset_tcpip --confirm
 ```
 
-Repairs return command results and post-repair evidence. Winsock/TCP-IP resets are treated as disruptive and may require a reboot. They are never part of silent startup optimization.
+A repair command never silently escalates privileges. If an operation needs administrator elevation, it is reported as skipped unless the process is already elevated.
 
-Inspect network health without changing anything:
-
-```powershell
-python main.py --network
-```
-
-Full system inspection also includes network evidence:
+## Safe optimization
 
 ```powershell
-python main.py --inspect
-```
-
-## Cloud-first test plan
-
-Use a disposable Windows VM first (Azure is suitable). Clone this repository, install Python 3.12, then run the tests and read-only inspection. Keep the AI key out of Git and configure it only inside the disposable VM after the provider endpoint/model contract has been verified.
-
-```powershell
-py -3.12 -m venv .venv
-.\.venv\Scripts\Activate.ps1
-python -m pip install -r requirements.txt
-pytest -q
-python main.py --network
-python main.py --network-plan
-python main.py --inspect
-```
-
-The GUI is available with `python main.py`.
-
-## Safe operations
-
-`python main.py --optimize-safe` can move only locally-authorized temporary files into the application's quarantine directory. It does not permanently delete them. Restore with:
-
-```powershell
+python main.py --optimize-safe
 python main.py --restore TOKEN
 ```
 
-Install observation at logon only when explicitly requested:
+Safe optimization moves only locally-authorized temporary files to quarantine. It never permanently deletes them.
+
+## Startup observation
+
+Startup observation is not enabled automatically. Install it only by explicit request:
 
 ```powershell
 python main.py --install-startup
@@ -111,16 +94,30 @@ python main.py --startup-status
 python main.py --remove-startup
 ```
 
+The installed task invokes `--background`, which performs observation only and disables AI/network probes.
+
 ## AI configuration
 
-Copy `.env.example` to `.env` in the disposable test environment or use environment variables:
+Set these environment variables only in the disposable test environment:
 
 - `AI_API_KEY`
 - `AI_BASE_URL`
 - `AI_MODEL`
 
-No AI key is required for telemetry, network diagnostics, scanning, quarantine, history, or tests.
+No AI key is required for telemetry, network diagnostics, scanning, quarantine, history or tests.
+
+## Test gate
+
+The GitHub Actions Windows job performs:
+
+1. dependency installation;
+2. Python compilation of the full application;
+3. the complete pytest regression suite;
+4. CLI help smoke test;
+5. offline system inspection smoke test with AI and external network probes disabled.
+
+For a real machine, use a disposable Windows VM first. The repository includes `lab/bootstrap.ps1` for repeatable setup. A cloud VM should be considered a separate validation stage; passing CI does not mean the application has been exercised on your personal PC.
 
 ## Safety contract
 
-No optimization is considered successful without measurable before/after evidence. The default system does not modify the registry, disable services, terminate processes, change drivers, or permanently delete personal files. Network repairs are explicit user-invoked actions, not automatic startup actions. AI is advisory; local deterministic policy is authoritative.
+No optimization is considered successful without measurable evidence. The default system does not modify the registry, disable services, terminate processes, change drivers, or permanently delete personal files. Network repairs are explicit user-invoked operations, not automatic startup actions. AI cannot authorize arbitrary commands or bypass local safety controls.
