@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import datetime as dt
+import time
+import uuid
+from pathlib import Path
 
 from .ai import AIClient
 from .config import Settings
@@ -16,8 +19,9 @@ from .network_diagnostics import dns_probe, https_probe, diagnose_connectivity
 from .network_health import evaluate as evaluate_network_health
 from .network_processes import connection_inventory
 from .network_recovery import RISK, RecoveryStep, build_plan, execute_verified
+from .policy import Policy, PolicyEngine
 from .safety import authorize_all
-from .storage import safe_quarantine, scan_temp
+from .storage import safe_quarantine, scan_temp, restore
 
 
 class Engine:
@@ -27,6 +31,11 @@ class Engine:
         self.data.mkdir(parents=True, exist_ok=True)
         self.db = DB(self.data / "smartpc.db")
         self.ai = AIClient(timeout=self.settings.ai_timeout_seconds)
+        self.auto_policy = PolicyEngine(Policy(
+            auto_safe_cleanup=self.settings.auto_safe_cleanup,
+            max_auto_files=self.settings.auto_max_files,
+            max_auto_bytes=self.settings.auto_max_bytes,
+        ))
 
     def inspect(self, include_ai=True, network_probes=True):
         current = snapshot()
@@ -98,13 +107,7 @@ class Engine:
             return None
 
     def _predict_disk_pressure(self, history, current):
-        """Estimate near-term C: pressure from measured historical free space.
-
-        The model is deliberately conservative: it uses a median pairwise
-        consumption rate, requires enough separated samples, ignores growth
-        below the configured noise floor, and only triggers when projected
-        free space reaches the normal cleanup threshold within the horizon.
-        """
+        """Estimate near-term C: pressure from measured historical free space."""
         points = []
         for item in history:
             ts = self._parse_snapshot_time(item.timestamp)
@@ -114,7 +117,6 @@ class Engine:
         if now is not None:
             points.append((now, float(max(current.disk_free_gb, 0.0))))
         points.sort(key=lambda x: x[0])
-        # Collapse duplicate/near-duplicate samples and retain a bounded tail.
         filtered = []
         for point in points:
             if not filtered or point[0] - filtered[-1][0] >= 300:
@@ -169,14 +171,32 @@ class Engine:
             result["reason"] = "projected free space remains above cleanup threshold"
         return result
 
-    def autonomous_maintenance(self):
-        """Run a bounded, unattended maintenance cycle.
+    def _automatic_gate(self):
+        """Return whether unattended mutation is currently permitted."""
+        now = time.time()
+        last = self.db.last_maintenance(successful_only=True)
+        if last:
+            elapsed_minutes = max(0.0, (now - float(last[0])) / 60.0)
+            if elapsed_minutes < self.settings.auto_cooldown_minutes:
+                return False, f"automatic cleanup cooldown active ({round(self.settings.auto_cooldown_minutes - elapsed_minutes, 1)} min remaining)"
+        day_start = now - 86400.0
+        used = self.db.maintenance_bytes_since(day_start)
+        if used >= self.settings.auto_daily_max_bytes:
+            return False, "automatic daily cleanup budget exhausted"
+        return True, None
 
-        Observation always runs. Mutation is gated by measured disk pressure
-        or a conservative historical trend prediction; only reversible
-        temporary-file quarantine is allowed. No network repair, registry
-        edit, service change, or AI command execution is performed here.
-        """
+    @staticmethod
+    def _moved_bytes(moved) -> int:
+        total = 0
+        for _src, dst, _token in moved:
+            try:
+                total += max(0, Path(dst).stat().st_size)
+            except OSError:
+                continue
+        return total
+
+    def autonomous_maintenance(self):
+        """Run one bounded, auditable unattended maintenance cycle."""
         before = snapshot()
         history = self.db.recent_snapshots(30)
         self.db.snapshot(before)
@@ -185,30 +205,87 @@ class Engine:
         trigger = bool(pressure["auto_cleanup_triggered"] or prediction["triggered"])
         moved = []
         skipped_reason = None
+        started = time.time()
+        owner = uuid.uuid4().hex
+        acquired = self.db.try_acquire_maintenance(owner)
 
-        if trigger and self.settings.auto_safe_cleanup:
-            candidates = authorize_all(scan_temp(self.settings.max_scan_files), auto=True)
-            moved = safe_quarantine(candidates, self.data / "quarantine", self.settings.max_quarantine_files)
-            ts = dt.datetime.now(dt.timezone.utc).isoformat()
-            for src, dst, token in moved:
-                self.db.action(ts, "autonomous_quarantine", src, f"ok:{dst}:{token}")
-        else:
-            skipped_reason = "automatic cleanup disabled" if not self.settings.auto_safe_cleanup else prediction["reason"] if not pressure["auto_cleanup_triggered"] else None
+        if not acquired:
+            skipped_reason = "another autonomous maintenance cycle is already running"
+            self.db.action(dt.datetime.now(dt.timezone.utc).isoformat(), "autonomous_maintenance", "maintenance", "skipped:" + skipped_reason)
+            return {
+                "before": before, "after": before, "pressure_before": pressure,
+                "prediction": prediction, "triggered": trigger, "pressure_after": pressure,
+                "moved": [], "skipped_reason": skipped_reason,
+                "mode": "autonomous_predictive_safe_maintenance",
+            }
 
-        after = snapshot()
-        self.db.snapshot(after)
-        after_pressure = self._disk_pressure(after)
-        return {
-            "before": before,
-            "after": after,
-            "pressure_before": pressure,
-            "prediction": prediction,
-            "triggered": trigger,
-            "pressure_after": after_pressure,
-            "moved": moved,
-            "skipped_reason": skipped_reason,
-            "mode": "autonomous_predictive_safe_maintenance",
-        }
+        try:
+            if not self.settings.auto_safe_cleanup:
+                skipped_reason = "automatic cleanup disabled"
+            elif not trigger:
+                skipped_reason = prediction["reason"]
+            else:
+                allowed, gate_reason = self._automatic_gate()
+                if not allowed:
+                    skipped_reason = gate_reason
+                else:
+                    candidates = authorize_all(scan_temp(self.settings.max_scan_files), auto=True)
+                    eligible = []
+                    count = 0
+                    used_bytes = 0
+                    for candidate in candidates:
+                        if self.auto_policy.allow(candidate, count, used_bytes):
+                            eligible.append(candidate)
+                            count += 1
+                            used_bytes += int(candidate.size)
+                    moved = safe_quarantine(
+                        eligible,
+                        self.data / "quarantine",
+                        limit=self.settings.auto_max_files,
+                        max_bytes=self.settings.auto_max_bytes,
+                    )
+                    moved_bytes = self._moved_bytes(moved)
+                    ts = dt.datetime.now(dt.timezone.utc).isoformat()
+                    for src, dst, token in moved:
+                        self.db.action(ts, "autonomous_quarantine", src, f"ok:{dst}:{token}")
+
+            after = snapshot()
+            # A successful quarantine should not make free space materially worse.
+            # If it does, restore the moved set and re-measure rather than claiming success.
+            if moved and after.disk_free_gb + 0.10 < before.disk_free_gb:
+                restored = 0
+                for _src, _dst, token in reversed(moved):
+                    try:
+                        restore(self.data / "quarantine", token)
+                        restored += 1
+                    except (OSError, KeyError, FileNotFoundError, FileExistsError):
+                        continue
+                moved = []
+                after = snapshot()
+                skipped_reason = f"verification rollback: free space decreased after cleanup; restored {restored} file(s)"
+                result = "rolled_back"
+            else:
+                result = "ok" if moved else "no_change"
+
+            self.db.snapshot(after)
+            after_pressure = self._disk_pressure(after)
+            bytes_moved = self._moved_bytes(moved)
+            self.db.maintenance_run(
+                started, time.time(),
+                "disk_pressure" if pressure["auto_cleanup_triggered"] else "predictive_pressure",
+                len(moved), bytes_moved,
+                before.disk_free_gb, after.disk_free_gb,
+                result, skipped_reason,
+            )
+            return {
+                "before": before, "after": after, "pressure_before": pressure,
+                "prediction": prediction, "triggered": trigger,
+                "pressure_after": after_pressure, "moved": moved,
+                "skipped_reason": skipped_reason,
+                "mode": "autonomous_predictive_safe_maintenance",
+            }
+        finally:
+            self.db.release_maintenance(owner)
 
     def optimize_safe(self):
         before = snapshot()
@@ -279,7 +356,6 @@ class Engine:
         return {"before": before, "result": result, "after": after, "verification": verification}
 
     def restore(self, token: str):
-        from .storage import restore
         path = restore(self.data / "quarantine", token)
         self.db.action(dt.datetime.now(dt.timezone.utc).isoformat(), "restore", path, "ok")
         return path
