@@ -25,7 +25,6 @@ RISK = {
     "reset_winsock": "medium",
     "reset_tcpip": "medium",
 }
-
 ADMIN_REQUIRED = {"renew_dhcp", "reset_winsock", "reset_tcpip"}
 
 
@@ -38,12 +37,13 @@ def is_admin() -> bool:
 
 
 def build_plan(issues: list[dict[str, Any]]) -> list[RecoveryStep]:
+    """Create only evidence-backed, supported recovery steps."""
     steps: list[RecoveryStep] = []
     for action in recommended_repairs(issues):
         risk = RISK.get(action)
         if risk is None:
             continue
-        reasons = [i.get("title", "") for i in issues if action in i.get("safe_actions", [])]
+        reasons = [str(i.get("title", "")) for i in issues if action in i.get("safe_actions", [])]
         steps.append(RecoveryStep(
             action=action,
             reason="; ".join(dict.fromkeys(x for x in reasons if x)),
@@ -59,10 +59,17 @@ def execute_verified(
     confirm: Callable[[RecoveryStep], bool] | None = None,
     admin_check: Callable[[], bool] | None = None,
 ) -> list[dict[str, Any]]:
-    """Execute only explicitly authorized, appropriately elevated recovery steps."""
+    """Execute only supported, explicitly authorized, appropriately elevated steps."""
     check_admin = admin_check or is_admin
     results: list[dict[str, Any]] = []
     for step in steps:
+        expected_risk = RISK.get(step.action)
+        if expected_risk is None:
+            results.append({"action": step.action, "skipped": True, "reason": "unsupported recovery action"})
+            continue
+        if step.risk != expected_risk:
+            results.append({"action": step.action, "skipped": True, "reason": "recovery risk mismatch"})
+            continue
         if step.risk in {"medium", "high", "critical"} and confirm is None:
             results.append({"action": step.action, "skipped": True, "reason": "explicit confirmation required for elevated-risk repair"})
             continue
@@ -114,7 +121,6 @@ def verify_recovery(before: dict[str, Any], probes: bool = True) -> dict[str, An
 
 
 def _snapshot_from_dict(value: dict[str, Any]):
-    """Rehydrate the minimal NetworkSnapshot shape needed by diagnose()."""
     from .network import NetworkSnapshot
     return NetworkSnapshot(
         timestamp=float(value.get("timestamp", 0.0)),
