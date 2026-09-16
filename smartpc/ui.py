@@ -3,14 +3,14 @@ import sys
 from PySide6.QtWidgets import QApplication, QHBoxLayout, QMainWindow, QVBoxLayout, QLabel, QPushButton, QTextEdit, QWidget
 
 from .engine import Engine
-from .windows import install_startup_task, remove_startup_task, startup_status
+from .windows import install_startup_task, remove_startup_task
 
 
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("SMARTPC AI")
-        self.resize(900, 680)
+        self.resize(980, 720)
         self.engine = Engine()
         root = QWidget()
         layout = QVBoxLayout(root)
@@ -19,7 +19,7 @@ class MainWindow(QMainWindow):
         self.output.setReadOnly(True)
 
         row1 = QHBoxLayout()
-        for label, handler in (("Analyze System", self.inspect), ("Diagnose Network", self.network), ("Show Repair Plan", self.network_plan), ("Safe Optimize", self.optimize)):
+        for label, handler in (("Analyze System", self.inspect), ("Deep C: Scan", self.deep_scan), ("Diagnose Network", self.network), ("Show Repair Plan", self.network_plan), ("Safe Optimize", self.optimize)):
             button = QPushButton(label)
             button.clicked.connect(handler)
             row1.addWidget(button)
@@ -36,20 +36,26 @@ class MainWindow(QMainWindow):
         self.status.setText(prefix)
         self.output.setPlainText(f"{type(exc).__name__}: {exc}")
 
+    @staticmethod
+    def _gb(value):
+        return value / 1024**3
+
     def inspect(self):
         try:
             r = self.engine.inspect()
             s = r["snapshot"]
             total = sum(x.size for x in r["candidates"]) / 1024**3
             n = r["network_health"]
+            d = r["disk_cleanup"]
             lines = [
                 f"SYSTEM  CPU {s.cpu_percent:.1f}% | RAM {s.ram_percent:.1f}% | Disk {s.disk_percent:.1f}% | Free {s.disk_free_gb:.1f} GB",
-                f"HEALTH  {r['health_score']}/100 | Temporary candidates {len(r['candidates'])} | Potential data {total:.2f} GB",
+                f"HEALTH  {r['health_score']}/100 | Temporary candidates {len(r['candidates'])} | Potential temp data {total:.2f} GB",
+                f"DISK CLEANUP  {d['gb']:.2f} GB identified | {d['automatic_quarantine_gb']:.2f} GB reversible-safe candidates",
                 f"NETWORK {n.state} | {n.score:.0f}/100 | Active interfaces {n.active_interfaces}",
                 "",
                 "DIAGNOSES:",
             ]
-            lines += [f"- {d.title}: {'; '.join(d.evidence)}" for d in r["diagnoses"]] or ["- No system threshold anomaly detected."]
+            lines += [f"- {x.title}: {'; '.join(x.evidence)}" for x in r["diagnoses"]] or ["- No system threshold anomaly detected."]
             lines += ["", "NETWORK DIAGNOSES:"]
             lines += [f"- {x.get('title', x.get('code', 'issue'))}: {'; '.join(map(str, x.get('evidence', [])))}" for x in r["network_diagnoses"]] or ["- No network issue detected by the current probes."]
             lines += ["", f"AI: {r['ai'].get('mode')} — {r['ai'].get('message', '')}", "No changes made."]
@@ -57,6 +63,26 @@ class MainWindow(QMainWindow):
             self.output.setPlainText("\n".join(lines))
         except Exception as exc:
             self._show_error("Analysis failed safely", exc)
+
+    def deep_scan(self):
+        try:
+            r = self.engine.deep_disk_scan()
+            s = r["summary"]
+            lines = [
+                "SMARTPC DEEP C: DRIVE CLEANUP",
+                "",
+                f"Reclaimable/review inventory: {s['gb']:.3f} GB across {s['files']} files",
+                f"Automatically quarantine-eligible: {s['automatic_quarantine_gb']:.3f} GB",
+                "",
+                "CATEGORIES:",
+            ]
+            for key, row in sorted(s["categories"].items(), key=lambda item: item[1]["bytes"], reverse=True):
+                lines.append(f"- {key}: {self._gb(row['bytes']):.3f} GB | {row['files']} files | risk={row['risk']} | action={row['action']}")
+            lines += ["", "Important: system caches are review-only. SMARTPC never permanently deletes them automatically."]
+            self.status.setText("Deep C: scan complete — nothing changed")
+            self.output.setPlainText("\n".join(lines))
+        except Exception as exc:
+            self._show_error("Deep disk scan failed safely", exc)
 
     def network(self):
         try:
