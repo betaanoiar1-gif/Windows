@@ -22,11 +22,16 @@ def _float_env(name: str, default: float, minimum: float) -> float:
 @dataclass(frozen=True)
 class Settings:
     data_dir: Path
-    # Safe autonomous maintenance is enabled by default. It only operates on
-    # locally-authorized temporary files and uses reversible quarantine.
     auto_safe_cleanup: bool = True
     auto_cleanup_free_percent: float = 10.0
     auto_cleanup_free_gb: float = 15.0
+    # Predictive maintenance prevents a fast-growing system drive from
+    # reaching the emergency threshold. It requires several historical
+    # samples and a meaningful measured consumption rate.
+    auto_predictive_cleanup: bool = True
+    auto_predictive_horizon_hours: float = 24.0
+    auto_predictive_min_samples: int = 6
+    auto_predictive_min_rate_gb_hour: float = 0.25
     max_scan_files: int = 10000
     max_quarantine_files: int = 5000
     ai_timeout_seconds: int = 30
@@ -44,6 +49,10 @@ class Settings:
             auto_safe_cleanup=os.getenv("SMARTPC_AUTO_SAFE_CLEANUP", "1") == "1",
             auto_cleanup_free_percent=_float_env("SMARTPC_AUTO_CLEANUP_FREE_PERCENT", 10.0, 1.0),
             auto_cleanup_free_gb=_float_env("SMARTPC_AUTO_CLEANUP_FREE_GB", 15.0, 1.0),
+            auto_predictive_cleanup=os.getenv("SMARTPC_AUTO_PREDICTIVE_CLEANUP", "1") == "1",
+            auto_predictive_horizon_hours=_float_env("SMARTPC_AUTO_PREDICTIVE_HORIZON_HOURS", 24.0, 1.0),
+            auto_predictive_min_samples=_int_env("SMARTPC_AUTO_PREDICTIVE_MIN_SAMPLES", 6, 3),
+            auto_predictive_min_rate_gb_hour=_float_env("SMARTPC_AUTO_PREDICTIVE_MIN_RATE_GB_HOUR", 0.25, 0.01),
             max_scan_files=_int_env("SMARTPC_MAX_SCAN_FILES", 10000, 100),
             max_quarantine_files=_int_env("SMARTPC_MAX_QUARANTINE_FILES", 5000, 1),
             ai_timeout_seconds=_int_env("SMARTPC_AI_TIMEOUT", 30, 5),
