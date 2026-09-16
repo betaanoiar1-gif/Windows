@@ -14,6 +14,8 @@ class Policy:
 
 
 class PolicyEngine:
+    """Deterministic gate for unattended cleanup; quarantine is the only allowed mutation."""
+
     def __init__(self, policy: Policy | None = None):
         self.policy = policy or Policy()
 
@@ -22,10 +24,14 @@ class PolicyEngine:
             return False
         if candidate.risk != self.policy.max_risk:
             return False
-        if candidate.action not in {Action.QUARANTINE, Action.DELETE}:
+        if candidate.action is not Action.QUARANTINE:
+            return False
+        if not candidate.reversible:
+            return False
+        if current_count < 0 or current_bytes < 0:
             return False
         if current_count >= self.policy.max_auto_files:
             return False
-        if current_bytes + candidate.size > self.policy.max_auto_bytes:
+        if candidate.size < 0 or current_bytes + candidate.size > self.policy.max_auto_bytes:
             return False
-        return bool(candidate.reversible)
+        return True
