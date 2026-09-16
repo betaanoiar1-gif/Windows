@@ -1,9 +1,10 @@
 import datetime as dt
-from pathlib import Path
 from .ai import AIClient
 from .config import Settings
 from .db import DB
 from .diagnostics import diagnose
+from .health import health_score
+from .learning import Baseline
 from .monitor import snapshot
 from .safety import authorize_all
 from .storage import safe_quarantine, scan_temp
@@ -19,15 +20,19 @@ class Engine:
     def inspect(self, include_ai=True):
         current = snapshot()
         self.db.snapshot(current)
+        history = self.db.recent_snapshots(30)
+        baseline = Baseline(history[:-1])
         candidates = authorize_all(scan_temp(self.settings.max_scan_files), auto=False)
-        diagnoses = diagnose(current, self.db.recent_snapshots(30)[:-1])
+        diagnoses = diagnose(current, history[:-1])
         payload = {
             "system": current.to_dict(),
+            "health_score": health_score(current, diagnoses),
+            "baseline": baseline.summary(),
             "diagnoses": [d.to_dict() for d in diagnoses],
             "candidates": [{"candidate_id": str(i), **c.to_dict()} for i, c in enumerate(candidates)]
         }
         ai = self.ai.analyze(payload) if include_ai else {"mode":"disabled","actions":[]}
-        return {"snapshot": current, "candidates": candidates, "diagnoses": diagnoses, "ai": ai}
+        return {"snapshot": current, "candidates": candidates, "diagnoses": diagnoses, "health_score": payload["health_score"], "baseline": payload["baseline"], "ai": ai}
 
     def optimize_safe(self):
         before = snapshot()
