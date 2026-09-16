@@ -65,3 +65,15 @@ def test_confirmed_admin_action_can_reach_repair(monkeypatch):
     )
     assert result == [{"action": "renew_dhcp", "ok": True}]
     assert calls == ["renew_dhcp"]
+
+
+def test_unsupported_or_tampered_step_is_rejected(monkeypatch):
+    called = []
+    monkeypatch.setattr("smartpc.network_recovery.repair", lambda action: called.append(action) or {"action": action, "ok": True})
+    result = execute_verified([RecoveryStep("not-a-real-action", "test", "safe")], confirm=lambda _: True, admin_check=lambda: True)
+    assert result[0]["skipped"] is True
+    assert called == []
+
+    result = execute_verified([RecoveryStep("reset_winsock", "test", "safe")], confirm=lambda _: True, admin_check=lambda: True)
+    assert result[0]["skipped"] is True
+    assert called == []
