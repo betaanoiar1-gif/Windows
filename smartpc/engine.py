@@ -6,6 +6,7 @@ from .ai import AIClient
 from .config import Settings
 from .db import DB
 from .diagnostics import diagnose
+from .disk_cleanup import scan_deep, summarize as summarize_disk_cleanup
 from .health import health_score
 from .learning import Baseline
 from .monitor import snapshot
@@ -33,6 +34,8 @@ class Engine:
         history = self.db.recent_snapshots(30)
         baseline = Baseline(history[:-1])
         candidates = authorize_all(scan_temp(self.settings.max_scan_files), auto=False)
+        disk_candidates = scan_deep(max_files=self.settings.max_scan_files, min_age_days=1.0)
+        disk_summary = summarize_disk_cleanup(disk_candidates)
         diagnoses = diagnose(current, history[:-1])
         net = network_snapshot(probes=network_probes)
         connectivity = None
@@ -48,6 +51,7 @@ class Engine:
             "health_score": health_score(current, diagnoses),
             "baseline": baseline.summary(),
             "diagnoses": [d.to_dict() for d in diagnoses],
+            "disk_cleanup": disk_summary,
             "network": net.to_dict(),
             "network_health": net_health.to_dict(),
             "network_connectivity": connectivity.to_dict() if connectivity else None,
@@ -61,11 +65,16 @@ class Engine:
         return {
             "snapshot": current, "candidates": candidates, "diagnoses": diagnoses,
             "health_score": payload["health_score"], "baseline": payload["baseline"],
+            "disk_cleanup": disk_summary,
             "network": net, "network_health": net_health, "network_connectivity": connectivity,
             "network_advanced": advanced_network, "network_processes": payload["network_processes"],
             "network_diagnoses": net_issues,
             "network_recommended_repairs": payload["network_recommended_repairs"], "ai": ai,
         }
+
+    def deep_disk_scan(self):
+        candidates = scan_deep(max_files=self.settings.max_scan_files, min_age_days=1.0)
+        return {"candidates": candidates, "summary": summarize_disk_cleanup(candidates)}
 
     def optimize_safe(self):
         before = snapshot()
