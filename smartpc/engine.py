@@ -118,12 +118,14 @@ class Engine:
         if after is not None:
             before_score = before["health"].score
             after_score = after["health"].score
+            before_codes = {x.get("code") for x in before["diagnoses"] if isinstance(x, dict) and x.get("code")}
+            after_codes = {x.get("code") for x in after["diagnoses"] if isinstance(x, dict) and x.get("code")}
             verification = {
                 "health_score_before": before_score,
                 "health_score_after": after_score,
                 "improved": after_score > before_score,
                 "unchanged": after_score == before_score,
-                "effective": after_score > before_score or bool(set(before["diagnoses"]) - set(after["diagnoses"])),
+                "effective": after_score > before_score or bool(before_codes - after_codes),
                 "remaining_issues": after["diagnoses"],
                 "advanced_after": after.get("advanced"),
             }
