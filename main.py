@@ -29,18 +29,22 @@ def main():
     p.add_argument("--startup-status", action="store_true")
     args = p.parse_args()
 
+    # Read-only observation must win if both flags are supplied. The startup
+    # task intentionally includes --observe-only and must never mutate files.
+    if args.observe_only:
+        Engine().inspect(include_ai=False, network_probes=False)
+        return 0
     if args.background:
         result = Engine().autonomous_maintenance()
         _dump({
             "mode": result["mode"],
             "pressure_before": result["pressure_before"],
+            "prediction": result["prediction"],
             "pressure_after": result["pressure_after"],
+            "triggered": result["triggered"],
             "quarantined": len(result["moved"]),
             "skipped_reason": result["skipped_reason"],
         })
-        return 0
-    if args.observe_only:
-        Engine().inspect(include_ai=False, network_probes=False)
         return 0
     if args.install_startup:
         install_startup_task()
