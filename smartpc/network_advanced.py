@@ -34,11 +34,12 @@ def _run(args: list[str], timeout: int = 10) -> tuple[int, str, str]:
 
 
 def https_probe(url: str, timeout: float = 5.0) -> ProbeResult:
-    """Bounded HTTPS reachability test. HTTP status errors still prove transport reached the host."""
+    """Bounded HTTPS GET. A HTTP error still proves that transport reached the host."""
     started = time.perf_counter()
     request = urllib.request.Request(url, method="GET", headers={"User-Agent": "SMARTPC-AI/0.1"})
     try:
         with urllib.request.urlopen(request, timeout=timeout) as response:
+            response.read(1)
             return ProbeResult(url, True, round((time.perf_counter() - started) * 1000, 2), response.status)
     except urllib.error.HTTPError as exc:
         return ProbeResult(url, True, round((time.perf_counter() - started) * 1000, 2), exc.code)
@@ -122,3 +123,21 @@ def summarize_https(results: list[ProbeResult]) -> dict[str, Any]:
         "consistent_failure": bool(results) and not successful,
         "latencies_ms": [r.latency_ms for r in successful if r.latency_ms is not None],
     }
+
+
+def advanced_snapshot(default_gateway: str | None = None, probes: bool = True) -> dict[str, Any]:
+    """Collect advanced read-only evidence in one bounded call."""
+    result: dict[str, Any] = {
+        "https": [], "https_summary": summarize_https([]), "dns": [],
+        "wifi": wifi_diagnostics(), "mtu": None,
+    }
+    if not probes:
+        return result
+    https_results = multi_https_probe()
+    dns_results = compare_dns_hosts()
+    result["https"] = [x.to_dict() for x in https_results]
+    result["https_summary"] = summarize_https(https_results)
+    result["dns"] = [x.to_dict() for x in dns_results]
+    if default_gateway:
+        result["mtu"] = mtu_probe(default_gateway)
+    return result
