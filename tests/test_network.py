@@ -30,6 +30,17 @@ def test_gateway_failure_recommends_only_low_impact_recovery():
     assert recommended_repairs(issues) == ["renew_dhcp"]
 
 
+def test_gateway_icmp_failure_is_not_outage_when_https_works():
+    s = make_snapshot(gateway_ping={"ok": False, "packet_loss_percent": 100}, dns={"ok": True})
+    connectivity = diagnose_connectivity({"ok": True}, {"ok": True})
+    issues = diagnose(s, connectivity=connectivity)
+    assert [x["code"] for x in issues] == ["NET_GATEWAY_ICMP_BLOCKED"]
+    assert recommended_repairs(issues) == []
+    health = evaluate(s, connectivity=connectivity)
+    assert health.score == 100
+    assert health.state == "healthy"
+
+
 def test_no_interface_is_high_severity():
     s = make_snapshot()
     s.interfaces = []
@@ -38,7 +49,7 @@ def test_no_interface_is_high_severity():
     assert issues[0]["severity"] == "high"
 
 
-def test_health_degrades_with_gateway_loss():
+def test_health_degrades_with_gateway_loss_without_layered_evidence():
     s = make_snapshot(gateway_ping={"ok": False, "packet_loss_percent": 100}, dns={"ok": True})
     h = evaluate(s)
     assert h.state == "poor"
