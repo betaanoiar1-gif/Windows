@@ -119,9 +119,14 @@ def _interfaces() -> list[dict[str, Any]]:
 def _probe_host(host: str, timeout: float = 2.0) -> dict[str, Any]:
     started = time.perf_counter()
     try:
-        addresses = socket.getaddrinfo(host, 443, type=socket.SOCK_STREAM)
+        old = socket.getdefaulttimeout()
+        socket.setdefaulttimeout(max(0.5, min(10.0, timeout)))
+        try:
+            addresses = socket.getaddrinfo(host, 443, type=socket.SOCK_STREAM)
+        finally:
+            socket.setdefaulttimeout(old)
         return {"host": host, "ok": bool(addresses), "latency_ms": round((time.perf_counter() - started) * 1000, 2), "addresses": sorted({x[4][0] for x in addresses})}
-    except OSError as exc:
+    except (OSError, ValueError, TypeError) as exc:
         return {"host": host, "ok": False, "latency_ms": round((time.perf_counter() - started) * 1000, 2), "error": str(exc), "addresses": []}
 
 
@@ -162,7 +167,8 @@ def snapshot(probes: bool = True) -> NetworkSnapshot:
     )
 
 
-def diagnose(s: NetworkSnapshot) -> list[dict[str, Any]]:
+def diagnose(s: NetworkSnapshot, connectivity: Any = None) -> list[dict[str, Any]]:
+    """Diagnose using layered evidence; ICMP alone never proves an Internet outage."""
     issues: list[dict[str, Any]] = []
     up = [i for i in s.interfaces if i["is_up"] and i["addresses"]]
     if not up:
@@ -171,8 +177,12 @@ def diagnose(s: NetworkSnapshot) -> list[dict[str, Any]]:
         issues.append({"code": "NET_NO_GATEWAY", "severity": "high", "title": "No default gateway detected", "evidence": ["Windows did not report a default gateway"], "safe_actions": ["renew_dhcp"]})
     gp = (s.internet or {}).get("gateway_ping") or {}
     dns = (s.internet or {}).get("dns") or {}
+    https_ok = getattr(connectivity, "https_ok", None)
     if s.default_gateways and gp.get("ok") is False:
-        issues.append({"code": "NET_GATEWAY_UNREACHABLE", "severity": "high", "title": "Default gateway is not responding", "evidence": [str(gp)], "safe_actions": ["renew_dhcp"]})
+        if https_ok is True:
+            issues.append({"code": "NET_GATEWAY_ICMP_BLOCKED", "severity": "info", "title": "Default gateway did not answer ICMP", "evidence": ["Gateway ICMP echo failed while external HTTPS connectivity succeeded", "ICMP may be filtered by a firewall or network device"], "safe_actions": []})
+        else:
+            issues.append({"code": "NET_GATEWAY_UNREACHABLE", "severity": "high", "title": "Default gateway is not responding", "evidence": [str(gp)], "safe_actions": ["renew_dhcp"]})
     if dns.get("ok") is False:
         issues.append({"code": "NET_DNS_FAILURE", "severity": "medium", "title": "DNS resolution probe failed", "evidence": [str(dns)], "safe_actions": ["flush_dns"]})
     if s.proxy.get("enabled"):
