@@ -23,42 +23,52 @@ class ConnectivityDiagnosis:
 def dns_probe(host: str = "www.microsoft.com", timeout: float = 3.0) -> dict[str, Any]:
     started = time.perf_counter()
     try:
-        addresses = socket.getaddrinfo(host, 443, type=socket.SOCK_STREAM)
+        timeout = max(0.5, min(10.0, float(timeout)))
+        old = socket.getdefaulttimeout()
+        socket.setdefaulttimeout(timeout)
+        try:
+            addresses = socket.getaddrinfo(host, 443, type=socket.SOCK_STREAM)
+        finally:
+            socket.setdefaulttimeout(old)
         return {
             "ok": bool(addresses),
             "host": host,
             "addresses": sorted({x[4][0] for x in addresses}),
             "latency_ms": round((time.perf_counter() - started) * 1000, 2),
         }
-    except OSError as exc:
+    except (OSError, ValueError, TypeError) as exc:
         return {"ok": False, "host": host, "addresses": [], "latency_ms": round((time.perf_counter() - started) * 1000, 2), "error": str(exc)}
 
 
 def https_probe(url: str = "https://www.microsoft.com/", timeout: float = 5.0) -> dict[str, Any]:
+    """Use a bounded GET so a successful transport is not dependent on HEAD support."""
     started = time.perf_counter()
-    request = urllib.request.Request(url, method="HEAD", headers={"User-Agent": "SMARTPC-AI/0.1"})
     try:
+        timeout = max(0.5, min(15.0, float(timeout)))
+        request = urllib.request.Request(url, method="GET", headers={"User-Agent": "SMARTPC-AI/0.1"})
         with urllib.request.urlopen(request, timeout=timeout) as response:
-            return {"ok": 200 <= response.status < 500, "status": response.status, "latency_ms": round((time.perf_counter() - started) * 1000, 2), "url": url}
+            response.read(1)
+            status = int(getattr(response, "status", response.getcode()))
+            return {"ok": 200 <= status < 500, "status": status, "latency_ms": round((time.perf_counter() - started) * 1000, 2), "url": url}
     except urllib.error.HTTPError as exc:
         return {"ok": True, "status": exc.code, "latency_ms": round((time.perf_counter() - started) * 1000, 2), "url": url}
-    except (urllib.error.URLError, TimeoutError, OSError) as exc:
+    except (urllib.error.URLError, TimeoutError, OSError, ValueError, TypeError) as exc:
         return {"ok": False, "status": None, "latency_ms": round((time.perf_counter() - started) * 1000, 2), "url": url, "error": str(exc)}
 
 
 def diagnose_connectivity(dns: dict[str, Any], https: dict[str, Any]) -> ConnectivityDiagnosis:
-    dns_ok = bool(dns.get("ok"))
-    https_ok = bool(https.get("ok"))
-    if https_ok:
+    dns_ok = True if dns.get("ok") is True else False if dns.get("ok") is False else None
+    https_ok = True if https.get("ok") is True else False if https.get("ok") is False else None
+    if https_ok is True:
         state = "internet_reachable"
-    elif dns_ok:
+    elif dns_ok is True and https_ok is False:
         state = "dns_only"
-    elif dns.get("error") and https.get("error"):
+    elif dns_ok is False and https_ok is False:
         state = "unreachable"
     else:
         state = "partially_reachable"
     latency = https.get("latency_ms") if https_ok else dns.get("latency_ms")
-    evidence = [f"DNS: {'ok' if dns_ok else 'failed'}", f"HTTPS: {'ok' if https_ok else 'failed'}"]
+    evidence = [f"DNS: {'ok' if dns_ok else 'failed' if dns_ok is False else 'unknown'}", f"HTTPS: {'ok' if https_ok else 'failed' if https_ok is False else 'unknown'}"]
     if dns.get("error"):
         evidence.append(f"DNS error: {str(dns['error'])[:300]}")
     if https.get("error"):
