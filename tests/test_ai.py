@@ -18,3 +18,16 @@ def test_ai_validator_rejects_unknown_targets_and_dangerous_actions():
     ]}, payload)
     assert len(result["actions"]) == 1
     assert result["actions"][0]["candidate_id"] == "1"
+
+
+def test_ai_validator_handles_malformed_lists_and_caps_output():
+    c = AIClient(timeout="not-a-number")
+    payload = {"candidates": [{"candidate_id": str(i)} for i in range(60)]}
+    result = c._validate({
+        "observations": "not-a-list",
+        "recommendations": None,
+        "actions": [{"candidate_id": str(i), "action": "review", "confidence": "bad"} for i in range(60)],
+    }, payload)
+    assert len(result["actions"]) == 50
+    assert all(x["confidence"] == 0.0 for x in result["actions"])
+    assert c.timeout == 30
