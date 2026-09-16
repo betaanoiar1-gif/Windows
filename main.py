@@ -14,6 +14,7 @@ def main():
     p = argparse.ArgumentParser(description="SMARTPC AI — safety-first Windows optimization")
     p.add_argument("--background", action="store_true", help="observe only; no cleanup or network repair")
     p.add_argument("--inspect", action="store_true", help="inspect system and network evidence")
+    p.add_argument("--deep-disk-scan", action="store_true", help="deep C: drive reclaimable-data inventory; no changes")
     p.add_argument("--network", action="store_true", help="inspect network health")
     p.add_argument("--network-plan", action="store_true", help="diagnose network and show a safe recovery plan")
     p.add_argument("--network-repair", choices=["flush_dns", "renew_dhcp", "reset_winsock", "reset_tcpip"], help="run one explicit network repair and verify it")
@@ -47,6 +48,10 @@ def main():
     if args.restore:
         print(engine.restore(args.restore))
         return 0
+    if args.deep_disk_scan:
+        r = engine.deep_disk_scan()
+        _dump({"summary": r["summary"], "top_candidates": [c.to_dict() for c in r["candidates"][:100]]})
+        return 0
     if args.network_repair:
         result = engine.network_repair(args.network_repair, confirm_medium=args.confirm, verify=probes)
         _dump(result)
@@ -61,7 +66,7 @@ def main():
         return 0
     if args.inspect:
         r = engine.inspect(include_ai=not args.no_ai, network_probes=probes)
-        _dump({"system": r["snapshot"].to_dict(), "health_score": r["health_score"], "baseline": r["baseline"], "diagnoses": [d.to_dict() for d in r["diagnoses"]], "candidate_count": len(r["candidates"]), "network": r["network"].to_dict(), "network_health": r["network_health"].to_dict(), "network_connectivity": r["network_connectivity"].to_dict() if r["network_connectivity"] else None, "network_advanced": r["network_advanced"], "network_diagnoses": r["network_diagnoses"], "network_recommended_repairs": r["network_recommended_repairs"], "ai": r["ai"]})
+        _dump({"system": r["snapshot"].to_dict(), "health_score": r["health_score"], "baseline": r["baseline"], "diagnoses": [d.to_dict() for d in r["diagnoses"]], "candidate_count": len(r["candidates"]), "disk_cleanup": r["disk_cleanup"], "network": r["network"].to_dict(), "network_health": r["network_health"].to_dict(), "network_connectivity": r["network_connectivity"].to_dict() if r["network_connectivity"] else None, "network_advanced": r["network_advanced"], "network_diagnoses": r["network_diagnoses"], "network_recommended_repairs": r["network_recommended_repairs"], "ai": r["ai"]})
         return 0
     if args.optimize_safe:
         r = engine.optimize_safe()
