@@ -8,7 +8,6 @@ from pathlib import Path
 from typing import Iterable
 
 from .models import Action, Candidate, Risk
-from .safety import is_protected
 
 
 @dataclass(frozen=True)
@@ -97,7 +96,7 @@ def _walk_files(root: Path, max_files: int, followlinks: bool = False) -> Iterab
                 if count >= max_files:
                     return
                 p = Path(base) / name
-                if p.is_symlink() or is_protected(str(p)):
+                if p.is_symlink():
                     continue
                 try:
                     if p.is_file():
