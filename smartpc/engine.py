@@ -9,7 +9,7 @@ from .diagnostics import diagnose
 from .health import health_score
 from .learning import Baseline
 from .monitor import snapshot
-from .network import snapshot as network_snapshot, diagnose as diagnose_network, recommended_repairs, repair as repair_network
+from .network import snapshot as network_snapshot, diagnose as diagnose_network, recommended_repairs
 from .network_advanced import advanced_snapshot
 from .network_diagnostics import dns_probe, https_probe, diagnose_connectivity
 from .network_health import evaluate as evaluate_network_health
@@ -57,18 +57,11 @@ class Engine:
         }
         ai = self.ai.analyze(payload) if include_ai else {"mode": "disabled", "actions": []}
         return {
-            "snapshot": current,
-            "candidates": candidates,
-            "diagnoses": diagnoses,
-            "health_score": payload["health_score"],
-            "baseline": payload["baseline"],
-            "network": net,
-            "network_health": net_health,
-            "network_connectivity": connectivity,
-            "network_advanced": advanced_network,
-            "network_diagnoses": net_issues,
-            "network_recommended_repairs": payload["network_recommended_repairs"],
-            "ai": ai,
+            "snapshot": current, "candidates": candidates, "diagnoses": diagnoses,
+            "health_score": payload["health_score"], "baseline": payload["baseline"],
+            "network": net, "network_health": net_health, "network_connectivity": connectivity,
+            "network_advanced": advanced_network, "network_diagnoses": net_issues,
+            "network_recommended_repairs": payload["network_recommended_repairs"], "ai": ai,
         }
 
     def optimize_safe(self):
@@ -95,20 +88,16 @@ class Engine:
             advanced_network = advanced_snapshot(default_gateway=gateway, probes=True)
         plan = diagnose_and_plan(probes=probes)
         return {
-            "network": net,
-            "health": health,
-            "connectivity": connectivity,
-            "advanced": advanced_network,
-            "diagnoses": issues,
-            "recommended_repairs": recommended_repairs(issues),
-            "recovery_plan": plan["plan"],
+            "network": net, "health": health, "connectivity": connectivity,
+            "advanced": advanced_network, "diagnoses": issues,
+            "recommended_repairs": recommended_repairs(issues), "recovery_plan": plan["plan"],
         }
 
     def network_repair(self, action: str, confirm_medium=False, verify=True):
         risk = RISK.get(action)
         if risk is None:
             return {"before": None, "result": {"action": action, "ok": False, "skipped": True, "reason": "unsupported network repair"}, "after": None, "verification": None}
-        before = self.network_inspect(probes=True)
+        before = self.network_inspect(probes=verify)
         step = RecoveryStep(
             action=action,
             reason="Explicit user-selected network repair",
@@ -133,9 +122,7 @@ class Engine:
                 "advanced_after": after.get("advanced"),
             }
         self.db.action(
-            dt.datetime.now(dt.timezone.utc).isoformat(),
-            f"network:{action}",
-            "network",
+            dt.datetime.now(dt.timezone.utc).isoformat(), f"network:{action}", "network",
             "ok" if result.get("ok") else ("skipped:" + str(result.get("reason", "unknown"))),
         )
         return {"before": before, "result": result, "after": after, "verification": verification}
