@@ -1,11 +1,8 @@
 from __future__ import annotations
 
 import statistics
-import time
 from dataclasses import dataclass, asdict
 from typing import Any
-
-from .network import snapshot
 
 
 @dataclass
@@ -26,9 +23,8 @@ class NetworkHealth:
 def _value(probe: dict[str, Any] | None, key: str) -> float | None:
     if not probe:
         return None
-    value = probe.get(key)
     try:
-        return float(value) if value is not None else None
+        return float(probe[key]) if probe.get(key) is not None else None
     except (TypeError, ValueError):
         return None
 
@@ -56,12 +52,12 @@ def evaluate(current, previous=None, interval_seconds: float = 1.0) -> NetworkHe
     if glat is not None and glat > 100:
         score -= min(15, (glat - 100) / 20); evidence.append(f"High gateway latency {glat:.1f} ms")
     if current.proxy.get("enabled"):
-        evidence.append("WinHTTP proxy is configured; this is not automatically treated as a fault")
+        evidence.append("WinHTTP proxy is configured; it may be intentional")
     if previous is not None:
         dt = max(0.1, interval_seconds)
-        sent = current.counters.get("bytes_sent", 0) - previous.counters.get("bytes_sent", 0)
-        recv = current.counters.get("bytes_recv", 0) - previous.counters.get("bytes_recv", 0)
-        bps = max(0, sent + recv) / dt
+        sent = max(0, current.counters.get("bytes_sent", 0) - previous.counters.get("bytes_sent", 0))
+        recv = max(0, current.counters.get("bytes_recv", 0) - previous.counters.get("bytes_recv", 0))
+        bps = (sent + recv) / dt
     else:
         bps = 0.0
     score = max(0.0, min(100.0, score))
@@ -74,17 +70,4 @@ def stability(samples: list[NetworkHealth]) -> dict[str, Any]:
         return {"samples": 0, "score_avg": None, "score_stddev": None, "degraded_ratio": None}
     scores = [x.score for x in samples]
     degraded = sum(x.state != "healthy" for x in samples) / len(samples)
-    return {
-        "samples": len(samples),
-        "score_avg": round(statistics.mean(scores), 2),
-        "score_stddev": round(statistics.pstdev(scores), 2),
-        "degraded_ratio": round(degraded, 3),
-    }
-
-
-def monitor_once(probes: bool = True) -> dict[str, Any]:
-    started = time.perf_counter()
-    current = snapshot(probes=probes)
-    previous = snapshot(probes=False)
-    health = evaluate(current, previous, max(0.1, time.perf_counter() - started))
-    return {"snapshot": current.to_dict(), "health": health.to_dict()}
+    return {"samples": len(samples), "score_avg": round(statistics.mean(scores), 2), "score_stddev": round(statistics.pstdev(scores), 2), "degraded_ratio": round(degraded, 3)}
