@@ -31,11 +31,14 @@ The network subsystem diagnoses real connectivity layers rather than claiming to
 - active adapters, addresses, link state, reported speed and MTU;
 - default gateway and bounded gateway ping;
 - configured DNS servers and DNS-resolution latency;
+- independent DNS and HTTPS reachability probes;
 - multiple independent HTTPS GET probes;
 - Wi-Fi state, SSID, signal, channel, radio type and link rates when Windows exposes them;
 - WinHTTP proxy state, treated as potentially intentional;
 - bounded IPv4 DF-ping MTU sampling/binary search;
 - network byte/packet counters and health/stability indicators.
+
+The gateway ping is an ICMP probe, not proof of Internet availability. When the gateway does not answer ICMP but external HTTPS succeeds, SMARTPC records the ICMP limitation as evidence instead of falsely declaring an Internet outage or recommending a repair. This follows Microsoft's guidance that ICMP can be blocked and should not be relied upon alone to prove overall connectivity. citeturn0search2turn0search1
 
 Wi-Fi parsing accepts common English and French Windows labels and retains raw command output for evidence. MTU diagnostics never change the adapter MTU.
 
@@ -104,7 +107,7 @@ Set these environment variables only in the disposable test environment:
 - `AI_BASE_URL`
 - `AI_MODEL`
 
-No AI key is required for telemetry, network diagnostics, scanning, quarantine, history or tests.
+No AI key is required for telemetry, network diagnostics, scanning, quarantine, history or tests. When AI is enabled, the supplied system/candidate evidence is sent to the configured provider; the provider never receives authority to execute commands.
 
 ## Test gate
 
@@ -116,7 +119,9 @@ The GitHub Actions Windows job performs:
 4. CLI help smoke test;
 5. offline system inspection smoke test with AI and external network probes disabled.
 
-For a real machine, use a disposable Windows VM first. The repository includes `lab/bootstrap.ps1` for repeatable setup. A cloud VM should be considered a separate validation stage; passing CI does not mean the application has been exercised on your personal PC.
+The separate Windows lab validates the application on a real hosted Windows VM, including network intelligence, startup read-only inspection and safe-optimization dry validation.
+
+For a real machine, use a disposable Windows VM first. The repository includes `lab/bootstrap.ps1` for repeatable setup. Passing CI does not mean the application has been exercised on your personal PC.
 
 ## Safety contract
 
