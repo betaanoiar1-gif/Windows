@@ -14,7 +14,7 @@ class MainWindow(QMainWindow):
         self.engine = Engine()
         root = QWidget()
         layout = QVBoxLayout(root)
-        self.status = QLabel("Ready — local safety mode; AI is optional")
+        self.status = QLabel("Ready — autonomous safe maintenance available; AI is optional")
         self.output = QTextEdit()
         self.output.setReadOnly(True)
 
@@ -24,7 +24,7 @@ class MainWindow(QMainWindow):
             button.clicked.connect(handler)
             row1.addWidget(button)
         row2 = QHBoxLayout()
-        for label, handler in (("Install Observation Startup", self.install_startup), ("Remove Startup", self.remove_startup)):
+        for label, handler in (("Install Autonomous Startup", self.install_startup), ("Remove Autonomous Startup", self.remove_startup)):
             button = QPushButton(label)
             button.clicked.connect(handler)
             row2.addWidget(button)
@@ -58,7 +58,7 @@ class MainWindow(QMainWindow):
             lines += [f"- {x.title}: {'; '.join(x.evidence)}" for x in r["diagnoses"]] or ["- No system threshold anomaly detected."]
             lines += ["", "NETWORK DIAGNOSES:"]
             lines += [f"- {x.get('title', x.get('code', 'issue'))}: {'; '.join(map(str, x.get('evidence', [])))}" for x in r["network_diagnoses"]] or ["- No network issue detected by the current probes."]
-            lines += ["", f"AI: {r['ai'].get('mode')} — {r['ai'].get('message', '')}", "No changes made."]
+            lines += ["", f"AI: {r['ai'].get('mode')} — {r['ai'].get('message', '')}", "No changes made by analysis."]
             self.status.setText("Analysis complete")
             self.output.setPlainText("\n".join(lines))
         except Exception as exc:
@@ -123,14 +123,15 @@ class MainWindow(QMainWindow):
     def install_startup(self):
         try:
             install_startup_task()
-            self.status.setText("Observation startup task installed")
+            self.status.setText("Autonomous startup + 30-minute maintenance installed")
+            self.output.setPlainText("SMARTPC AI will observe at Windows logon and run bounded safe maintenance every 30 minutes.\n\nAutomatic mutation is limited to reversible temporary-file quarantine when the system drive is under pressure.\nNetwork repairs, registry changes, service changes, driver changes and permanent deletion remain manual.")
         except Exception as exc:
-            self._show_error("Startup installation failed", exc)
+            self._show_error("Autonomous startup installation failed", exc)
 
     def remove_startup(self):
         try:
             remove_startup_task()
-            self.status.setText("Startup task removed/requested")
+            self.status.setText("Autonomous startup + maintenance removed/requested")
         except Exception as exc:
             self._show_error("Startup removal failed", exc)
 
