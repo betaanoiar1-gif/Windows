@@ -25,14 +25,18 @@ class Settings:
     auto_safe_cleanup: bool = True
     auto_cleanup_free_percent: float = 10.0
     auto_cleanup_free_gb: float = 15.0
-    # Predictive maintenance prevents a fast-growing system drive from
-    # reaching the emergency threshold. It requires several historical
-    # samples and a meaningful measured consumption rate.
     auto_predictive_cleanup: bool = True
     auto_predictive_horizon_hours: float = 24.0
     auto_predictive_min_samples: int = 6
     auto_predictive_min_rate_gb_hour: float = 0.25
+    # Unattended mutation is deliberately bounded independently of scan size.
+    auto_max_files: int = 50
+    auto_max_bytes: int = 512 * 1024 * 1024
+    auto_cooldown_minutes: float = 360.0
+    auto_daily_max_bytes: int = 1024 * 1024 * 1024
     max_scan_files: int = 10000
+    # Kept for compatibility with older callers; autonomous cleanup uses the
+    # stricter auto_max_files budget above.
     max_quarantine_files: int = 5000
     ai_timeout_seconds: int = 30
 
@@ -53,6 +57,10 @@ class Settings:
             auto_predictive_horizon_hours=_float_env("SMARTPC_AUTO_PREDICTIVE_HORIZON_HOURS", 24.0, 1.0),
             auto_predictive_min_samples=_int_env("SMARTPC_AUTO_PREDICTIVE_MIN_SAMPLES", 6, 3),
             auto_predictive_min_rate_gb_hour=_float_env("SMARTPC_AUTO_PREDICTIVE_MIN_RATE_GB_HOUR", 0.25, 0.01),
+            auto_max_files=_int_env("SMARTPC_AUTO_MAX_FILES", 50, 1),
+            auto_max_bytes=_int_env("SMARTPC_AUTO_MAX_BYTES", 512 * 1024 * 1024, 1024 * 1024),
+            auto_cooldown_minutes=_float_env("SMARTPC_AUTO_COOLDOWN_MINUTES", 360.0, 0.0),
+            auto_daily_max_bytes=_int_env("SMARTPC_AUTO_DAILY_MAX_BYTES", 1024 * 1024 * 1024, 1024 * 1024),
             max_scan_files=_int_env("SMARTPC_MAX_SCAN_FILES", 10000, 100),
             max_quarantine_files=_int_env("SMARTPC_MAX_QUARANTINE_FILES", 5000, 1),
             ai_timeout_seconds=_int_env("SMARTPC_AI_TIMEOUT", 30, 5),
