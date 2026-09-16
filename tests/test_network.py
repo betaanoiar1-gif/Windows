@@ -1,6 +1,7 @@
 from smartpc.network import NetworkSnapshot, diagnose, recommended_repairs
+from smartpc.network_diagnostics import diagnose_connectivity
 from smartpc.network_health import evaluate, stability
-from smartpc.network_recovery import build_plan
+from smartpc.network_recovery import build_plan, execute_verified
 
 
 def make_snapshot(**internet):
@@ -22,12 +23,11 @@ def test_dns_failure_has_safe_first_repair():
     assert recommended_repairs(issues) == ["flush_dns"]
 
 
-def test_gateway_failure_recommends_recovery():
+def test_gateway_failure_recommends_only_low_impact_recovery():
     s = make_snapshot(gateway_ping={"ok": False}, dns={"ok": True})
     issues = diagnose(s)
     assert any(x["code"] == "NET_GATEWAY_UNREACHABLE" for x in issues)
-    assert "renew_dhcp" in recommended_repairs(issues)
-    assert "reset_winsock" in recommended_repairs(issues)
+    assert recommended_repairs(issues) == ["renew_dhcp"]
 
 
 def test_no_interface_is_high_severity():
@@ -48,9 +48,20 @@ def test_health_degrades_with_gateway_loss():
 def test_recovery_plan_orders_basic_repairs():
     s = make_snapshot(gateway_ping={"ok": False}, dns={"ok": True})
     plan = build_plan(diagnose(s))
-    assert [x.action for x in plan] == ["renew_dhcp", "reset_winsock"]
+    assert [x.action for x in plan] == ["renew_dhcp"]
     assert plan[0].risk == "low"
-    assert plan[1].requires_reboot is False
+
+
+def test_medium_risk_repair_requires_explicit_confirmation():
+    from smartpc.network_recovery import RecoveryStep
+    result = execute_verified([RecoveryStep("reset_winsock", "test", "medium")])
+    assert result[0]["skipped"] is True
+
+
+def test_layered_connectivity_classification():
+    assert diagnose_connectivity({"ok": False, "error": "dns"}, {"ok": False, "error": "dns"}).state == "unreachable"
+    assert diagnose_connectivity({"ok": True}, {"ok": False, "error": "blocked"}).state == "dns_only"
+    assert diagnose_connectivity({"ok": True}, {"ok": True}).state == "internet_reachable"
 
 
 def test_stability_summary():
