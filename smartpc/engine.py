@@ -12,7 +12,7 @@ from .diagnostics import diagnose
 from .disk_cleanup import scan_deep, summarize as summarize_disk_cleanup
 from .health import health_score
 from .learning import Baseline
-from .monitor import snapshot
+from .monitor import snapshot, snapshot_fast
 from .network import snapshot as network_snapshot, diagnose as diagnose_network, recommended_repairs
 from .network_advanced import advanced_snapshot
 from .network_diagnostics import dns_probe, https_probe, diagnose_connectivity
@@ -38,7 +38,7 @@ class Engine:
         ))
 
     def inspect(self, include_ai=True, network_probes=True):
-        current = snapshot()
+        current = snapshot(self.settings.fast_monitor_interval, self.settings.max_process_rows)
         self.db.snapshot(current)
         history = self.db.recent_snapshots(30)
         baseline = Baseline(history[:-1])
@@ -56,12 +56,9 @@ class Engine:
         net_issues = diagnose_network(net, connectivity=connectivity)
         net_health = evaluate_network_health(net, connectivity=connectivity)
         payload = {
-            "system": current.to_dict(),
-            "health_score": health_score(current, diagnoses),
-            "baseline": baseline.summary(),
-            "diagnoses": [d.to_dict() for d in diagnoses],
-            "disk_cleanup": disk_summary,
-            "network": net.to_dict(),
+            "system": current.to_dict(), "health_score": health_score(current, diagnoses),
+            "baseline": baseline.summary(), "diagnoses": [d.to_dict() for d in diagnoses],
+            "disk_cleanup": disk_summary, "network": net.to_dict(),
             "network_health": net_health.to_dict(),
             "network_connectivity": connectivity.to_dict() if connectivity else None,
             "network_advanced": advanced_network,
@@ -74,10 +71,9 @@ class Engine:
         return {
             "snapshot": current, "candidates": candidates, "diagnoses": diagnoses,
             "health_score": payload["health_score"], "baseline": payload["baseline"],
-            "disk_cleanup": disk_summary,
-            "network": net, "network_health": net_health, "network_connectivity": connectivity,
-            "network_advanced": advanced_network, "network_processes": payload["network_processes"],
-            "network_diagnoses": net_issues,
+            "disk_cleanup": disk_summary, "network": net, "network_health": net_health,
+            "network_connectivity": connectivity, "network_advanced": advanced_network,
+            "network_processes": payload["network_processes"], "network_diagnoses": net_issues,
             "network_recommended_repairs": payload["network_recommended_repairs"], "ai": ai,
         }
 
@@ -91,11 +87,8 @@ class Engine:
         total_gb = (free_gb / (free_percent / 100.0)) if free_percent > 0 else 0.0
         critical = free_percent <= self.settings.auto_cleanup_free_percent or free_gb <= self.settings.auto_cleanup_free_gb
         return {
-            "drive": "system",
-            "total_gb": round(total_gb, 2),
-            "free_gb": round(free_gb, 2),
-            "free_percent": round(free_percent, 2),
-            "state": "critical" if critical else "normal",
+            "drive": "system", "total_gb": round(total_gb, 2), "free_gb": round(free_gb, 2),
+            "free_percent": round(free_percent, 2), "state": "critical" if critical else "normal",
             "auto_cleanup_triggered": bool(critical and self.settings.auto_safe_cleanup),
         }
 
@@ -107,7 +100,6 @@ class Engine:
             return None
 
     def _predict_disk_pressure(self, history, current):
-        """Estimate near-term C: pressure from measured historical free space."""
         points = []
         for item in history:
             ts = self._parse_snapshot_time(item.timestamp)
@@ -124,22 +116,12 @@ class Engine:
             else:
                 filtered[-1] = point
         points = filtered[-20:]
-
-        result = {
-            "enabled": bool(self.settings.auto_predictive_cleanup),
-            "samples": len(points),
-            "rate_gb_per_hour": 0.0,
-            "projected_free_gb": None,
-            "horizon_hours": self.settings.auto_predictive_horizon_hours,
-            "triggered": False,
-            "reason": "insufficient historical samples",
-        }
+        result = {"enabled": bool(self.settings.auto_predictive_cleanup), "samples": len(points), "rate_gb_per_hour": 0.0, "projected_free_gb": None, "horizon_hours": self.settings.auto_predictive_horizon_hours, "triggered": False, "reason": "insufficient historical samples"}
         if not self.settings.auto_predictive_cleanup:
             result["reason"] = "predictive maintenance disabled"
             return result
         if len(points) < self.settings.auto_predictive_min_samples:
             return result
-
         rates = []
         for (t0, f0), (t1, f1) in zip(points, points[1:]):
             hours = (t1 - t0) / 3600.0
@@ -151,18 +133,15 @@ class Engine:
         if not rates:
             result["reason"] = "no measured C: consumption trend"
             return result
-
         rates.sort()
         rate = rates[len(rates) // 2]
         result["rate_gb_per_hour"] = round(rate, 4)
         if rate < self.settings.auto_predictive_min_rate_gb_hour:
             result["reason"] = "measured growth below predictive noise floor"
             return result
-
         current_free = max(float(current.disk_free_gb), 0.0)
         target_free = max(self.settings.auto_cleanup_free_gb, current_free * (self.settings.auto_cleanup_free_percent / 100.0))
-        horizon = self.settings.auto_predictive_horizon_hours
-        projected = max(0.0, current_free - rate * horizon)
+        projected = max(0.0, current_free - rate * self.settings.auto_predictive_horizon_hours)
         result["projected_free_gb"] = round(projected, 2)
         if projected <= target_free and current_free > target_free:
             result["triggered"] = True
@@ -172,15 +151,13 @@ class Engine:
         return result
 
     def _automatic_gate(self):
-        """Return whether unattended mutation is currently permitted."""
         now = time.time()
         last = self.db.last_maintenance(successful_only=True)
         if last:
             elapsed_minutes = max(0.0, (now - float(last[0])) / 60.0)
             if elapsed_minutes < self.settings.auto_cooldown_minutes:
                 return False, f"automatic cleanup cooldown active ({round(self.settings.auto_cooldown_minutes - elapsed_minutes, 1)} min remaining)"
-        day_start = now - 86400.0
-        used = self.db.maintenance_bytes_since(day_start)
+        used = self.db.maintenance_bytes_since(now - 86400.0)
         if used >= self.settings.auto_daily_max_bytes:
             return False, "automatic daily cleanup budget exhausted"
         return True, None
@@ -196,8 +173,10 @@ class Engine:
         return total
 
     def autonomous_maintenance(self):
-        """Run one bounded, auditable unattended maintenance cycle."""
-        before = snapshot()
+        """Fast unattended cycle: no process enumeration, AI, deep scan or network probes."""
+        # This path deliberately uses the zero-wait snapshot. Expensive diagnostics
+        # belong to explicit inspection; scheduled maintenance must stay lightweight.
+        before = snapshot_fast()
         history = self.db.recent_snapshots(30)
         self.db.snapshot(before)
         pressure = self._disk_pressure(before)
@@ -208,17 +187,10 @@ class Engine:
         started = time.time()
         owner = uuid.uuid4().hex
         acquired = self.db.try_acquire_maintenance(owner)
-
         if not acquired:
             skipped_reason = "another autonomous maintenance cycle is already running"
             self.db.action(dt.datetime.now(dt.timezone.utc).isoformat(), "autonomous_maintenance", "maintenance", "skipped:" + skipped_reason)
-            return {
-                "before": before, "after": before, "pressure_before": pressure,
-                "prediction": prediction, "triggered": trigger, "pressure_after": pressure,
-                "moved": [], "skipped_reason": skipped_reason,
-                "mode": "autonomous_predictive_safe_maintenance",
-            }
-
+            return {"before": before, "after": before, "pressure_before": pressure, "prediction": prediction, "pressure_after": pressure, "triggered": trigger, "moved": [], "skipped_reason": skipped_reason, "mode": "autonomous_predictive_safe_maintenance"}
         try:
             if not self.settings.auto_safe_cleanup:
                 skipped_reason = "automatic cleanup disabled"
@@ -238,20 +210,11 @@ class Engine:
                             eligible.append(candidate)
                             count += 1
                             used_bytes += int(candidate.size)
-                    moved = safe_quarantine(
-                        eligible,
-                        self.data / "quarantine",
-                        limit=self.settings.auto_max_files,
-                        max_bytes=self.settings.auto_max_bytes,
-                    )
-                    moved_bytes = self._moved_bytes(moved)
+                    moved = safe_quarantine(eligible, self.data / "quarantine", limit=self.settings.auto_max_files, max_bytes=self.settings.auto_max_bytes)
                     ts = dt.datetime.now(dt.timezone.utc).isoformat()
                     for src, dst, token in moved:
                         self.db.action(ts, "autonomous_quarantine", src, f"ok:{dst}:{token}")
-
-            after = snapshot()
-            # A successful quarantine should not make free space materially worse.
-            # If it does, restore the moved set and re-measure rather than claiming success.
+            after = snapshot_fast()
             if moved and after.disk_free_gb + 0.10 < before.disk_free_gb:
                 restored = 0
                 for _src, _dst, token in reversed(moved):
@@ -261,41 +224,28 @@ class Engine:
                     except (OSError, KeyError, FileNotFoundError, FileExistsError):
                         continue
                 moved = []
-                after = snapshot()
+                after = snapshot_fast()
                 skipped_reason = f"verification rollback: free space decreased after cleanup; restored {restored} file(s)"
                 result = "rolled_back"
             else:
                 result = "ok" if moved else "no_change"
-
             self.db.snapshot(after)
             after_pressure = self._disk_pressure(after)
             bytes_moved = self._moved_bytes(moved)
-            self.db.maintenance_run(
-                started, time.time(),
-                "disk_pressure" if pressure["auto_cleanup_triggered"] else "predictive_pressure",
-                len(moved), bytes_moved,
-                before.disk_free_gb, after.disk_free_gb,
-                result, skipped_reason,
-            )
-            return {
-                "before": before, "after": after, "pressure_before": pressure,
-                "prediction": prediction, "triggered": trigger,
-                "pressure_after": after_pressure, "moved": moved,
-                "skipped_reason": skipped_reason,
-                "mode": "autonomous_predictive_safe_maintenance",
-            }
+            self.db.maintenance_run(started, time.time(), "disk_pressure" if pressure["auto_cleanup_triggered"] else "predictive_pressure", len(moved), bytes_moved, before.disk_free_gb, after.disk_free_gb, result, skipped_reason)
+            return {"before": before, "after": after, "pressure_before": pressure, "prediction": prediction, "triggered": trigger, "pressure_after": after_pressure, "moved": moved, "skipped_reason": skipped_reason, "mode": "autonomous_predictive_safe_maintenance"}
         finally:
             self.db.release_maintenance(owner)
 
     def optimize_safe(self):
-        before = snapshot()
+        before = snapshot(self.settings.fast_monitor_interval, self.settings.max_process_rows)
         self.db.snapshot(before)
         candidates = authorize_all(scan_temp(self.settings.max_scan_files), auto=True)
         moved = safe_quarantine(candidates, self.data / "quarantine", self.settings.max_quarantine_files)
         ts = dt.datetime.now(dt.timezone.utc).isoformat()
         for src, dst, token in moved:
             self.db.action(ts, "quarantine", src, f"ok:{dst}:{token}")
-        after = snapshot()
+        after = snapshot(self.settings.fast_monitor_interval, self.settings.max_process_rows)
         self.db.snapshot(after)
         return {"before": before, "after": after, "moved": moved}
 
@@ -311,25 +261,14 @@ class Engine:
         issues = diagnose_network(net, connectivity=connectivity)
         health = evaluate_network_health(net, connectivity=connectivity)
         plan = [step.to_dict() for step in build_plan(issues)]
-        return {
-            "network": net, "health": health, "connectivity": connectivity,
-            "advanced": advanced_network, "process_network": process_network,
-            "diagnoses": issues, "recommended_repairs": recommended_repairs(issues),
-            "recovery_plan": plan,
-        }
+        return {"network": net, "health": health, "connectivity": connectivity, "advanced": advanced_network, "process_network": process_network, "diagnoses": issues, "recommended_repairs": recommended_repairs(issues), "recovery_plan": plan}
 
     def network_repair(self, action: str, confirm_medium=False, verify=True):
         risk = RISK.get(action)
         if risk is None:
             return {"before": None, "result": {"action": action, "ok": False, "skipped": True, "reason": "unsupported network repair"}, "after": None, "verification": None}
         before = self.network_inspect(probes=verify)
-        step = RecoveryStep(
-            action=action,
-            reason="Explicit user-selected network repair",
-            risk=risk,
-            requires_reboot=action in {"reset_winsock", "reset_tcpip"},
-            requires_admin=action in {"renew_dhcp", "reset_winsock", "reset_tcpip"},
-        )
+        step = RecoveryStep(action=action, reason="Explicit user-selected network repair", risk=risk, requires_reboot=action in {"reset_winsock", "reset_tcpip"}, requires_admin=action in {"renew_dhcp", "reset_winsock", "reset_tcpip"})
         confirm = (lambda _step: True) if risk == "safe" else ((lambda _step: True) if (risk == "low" and confirm_medium) else None)
         results = execute_verified([step], confirm=confirm)
         result = results[0] if results else {"action": action, "ok": False, "skipped": True, "reason": "no recovery result"}
@@ -340,22 +279,9 @@ class Engine:
             after_score = after["health"].score
             before_codes = {x.get("code") for x in before["diagnoses"] if isinstance(x, dict) and x.get("code")}
             after_codes = {x.get("code") for x in after["diagnoses"] if isinstance(x, dict) and x.get("code")}
-            verification = {
-                "health_score_before": before_score,
-                "health_score_after": after_score,
-                "improved": after_score > before_score,
-                "unchanged": after_score == before_score,
-                "effective": after_score > before_score or bool(before_codes - after_codes),
-                "remaining_issues": after["diagnoses"],
-                "advanced_after": after.get("advanced"),
-            }
-        self.db.action(
-            dt.datetime.now(dt.timezone.utc).isoformat(), f"network:{action}", "network",
-            "ok" if result.get("ok") else ("skipped:" + str(result.get("reason", "unknown"))),
-        )
+            verification = {"health_score_before": before_score, "health_score_after": after_score, "improved": after_score > before_score, "unchanged": after_score == before_score, "effective": after_score > before_score or bool(before_codes - after_codes), "remaining_issues": after["diagnoses"], "advanced_after": after.get("advanced")}
+        self.db.action(dt.datetime.now(dt.timezone.utc).isoformat(), f"network:{action}", "network", "ok" if result.get("ok") else ("skipped:" + str(result.get("reason", "unknown"))))
         return {"before": before, "result": result, "after": after, "verification": verification}
 
     def restore(self, token: str):
-        path = restore(self.data / "quarantine", token)
-        self.db.action(dt.datetime.now(dt.timezone.utc).isoformat(), "restore", path, "ok")
-        return path
+        return restore(self.data / "quarantine", token)
