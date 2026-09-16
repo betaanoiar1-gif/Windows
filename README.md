@@ -14,13 +14,39 @@ AI is advisory only. Local deterministic policy and the safety engine remain aut
 - Device-specific baseline and deterministic anomaly diagnostics.
 - Read-only Windows startup inventory.
 - Temporary-file discovery with bounded scans and reparse/symlink avoidance.
-- Protected Windows/application roots.
+- Professional deep C: drive cleanup inventory with categorized reclaimable caches, age filtering, size ranking and risk-aware actions.
 - Reversible quarantine with restore support; no permanent deletion.
 - SQLite history for snapshots and actions.
 - Optional provider-neutral OpenAI-compatible AI advisory layer with strict candidate/action validation.
 - Explicit Windows logon observation task controls.
 - Disposable lab fixture generator.
 - Unified Windows CI regression suite plus offline CLI smoke test.
+
+## Professional C: Drive Cleanup
+
+SMARTPC treats a full system drive as a diagnostic problem, not simply a "delete temp files" problem. The deep scanner inventories multiple known Windows reclaimable locations and separates **safe reversible cleanup** from **review-only system caches**.
+
+The current inventory covers:
+
+- user/system temporary files;
+- Windows Update download cache;
+- Delivery Optimization cache;
+- Windows Error Reporting leftovers;
+- old crash/minidump files;
+- DirectX shader cache;
+- Explorer thumbnail databases.
+
+The scanner is bounded, avoids symbolic links, skips inaccessible/locked files naturally, deduplicates paths, ignores very recent files by default, ranks candidates by size and reports per-category totals. System-cache candidates are never silently turned into automatic destructive operations. Only the existing safe temporary-file path is eligible for reversible quarantine.
+
+This deliberately does **not** treat Downloads, Documents, installed applications, pagefile.sys, hiberfil.sys, registry hives or arbitrary large personal files as junk. They may consume C: space, but deleting or changing them requires a different evidence and authorization path.
+
+Deep scan without changing anything:
+
+```powershell
+python main.py --deep-disk-scan
+```
+
+The desktop application exposes the same capability as **Deep C: Scan**. A normal system inspection also includes the deep cleanup summary.
 
 ## Network Intelligence & Recovery
 
