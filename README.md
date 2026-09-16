@@ -8,6 +8,46 @@ Safety-first Windows optimization laboratory and desktop application.
 
 AI is advisory only. Local deterministic policy and the safety engine remain authoritative over every system-changing operation.
 
+## Autonomous operation
+
+SMARTPC is designed to operate continuously after an explicit one-time startup installation rather than requiring the user to open the application for every maintenance cycle.
+
+When installed, Windows Task Scheduler runs two bounded tasks:
+
+- **SMARTPC AI** at logon: read-only observation, baseline/history collection and diagnostics;
+- **SMARTPC AI Maintenance** every 30 minutes: autonomous disk-pressure check and, only when pressure is critical, safe temporary-file quarantine.
+
+The maintenance task does not perform network repairs, registry edits, service changes, driver changes, process termination or permanent deletion. AI is not required for autonomous maintenance and never receives execution authority.
+
+The autonomous disk trigger is conservative: by default it activates when system-drive free space is at or below **10% OR 15 GB**, and the cleanup remains limited to locally-authorized temporary files. The thresholds can be changed with `SMARTPC_AUTO_CLEANUP_FREE_PERCENT` and `SMARTPC_AUTO_CLEANUP_FREE_GB`. Set `SMARTPC_AUTO_SAFE_CLEANUP=0` to disable autonomous mutation while retaining observation.
+
+Every autonomous cycle records before/after disk evidence and each quarantine action in the local SQLite history. Quarantine is reversible through the existing restore mechanism.
+
+Install once on Windows:
+
+```powershell
+python main.py --install-startup
+python main.py --startup-status
+```
+
+Remove both tasks:
+
+```powershell
+python main.py --remove-startup
+```
+
+Run one autonomous maintenance cycle manually:
+
+```powershell
+python main.py --background
+```
+
+Run read-only observation manually:
+
+```powershell
+python main.py --observe-only
+```
+
 ## Current capabilities
 
 - Real CPU, RAM, disk, process and network telemetry through `psutil`.
@@ -18,7 +58,7 @@ AI is advisory only. Local deterministic policy and the safety engine remain aut
 - Reversible quarantine with restore support; no permanent deletion.
 - SQLite history for snapshots and actions.
 - Optional provider-neutral OpenAI-compatible AI advisory layer with strict candidate/action validation.
-- Explicit Windows logon observation task controls.
+- Explicit Windows logon observation and autonomous maintenance task controls.
 - Disposable lab fixture generator.
 - Unified Windows CI regression suite plus offline CLI smoke test.
 
@@ -113,18 +153,6 @@ python main.py --restore TOKEN
 
 Safe optimization moves only locally-authorized temporary files to quarantine. It never permanently deletes them.
 
-## Startup observation
-
-Startup observation is not enabled automatically. Install it only by explicit request:
-
-```powershell
-python main.py --install-startup
-python main.py --startup-status
-python main.py --remove-startup
-```
-
-The installed task invokes `--background`, which performs observation only and disables AI/network probes.
-
 ## AI configuration
 
 Set these environment variables only in the disposable test environment:
@@ -151,4 +179,4 @@ For a real machine, use a disposable Windows VM first. The repository includes `
 
 ## Safety contract
 
-No optimization is considered successful without measurable evidence. The default system does not modify the registry, disable services, terminate processes, change drivers, or permanently delete personal files. Network repairs are explicit user-invoked operations, not automatic startup actions. AI cannot authorize arbitrary commands or bypass local safety controls.
+No optimization is considered successful without measurable evidence. The default system does not modify the registry, disable services, terminate processes, change drivers, or permanently delete personal files. Network repairs are explicit user-invoked operations, not automatic startup actions. Autonomous maintenance is limited to reversible temporary-file quarantine under conservative disk-pressure thresholds. AI cannot authorize arbitrary commands or bypass local safety controls.
