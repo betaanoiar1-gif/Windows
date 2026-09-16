@@ -30,14 +30,14 @@ def maintenance_status():
 
 
 def install_startup_task():
-    """Install observation at logon and bounded autonomous maintenance every 30 minutes."""
+    """Install lightweight observation at logon and bounded maintenance every 30 minutes."""
     if not is_windows():
         raise RuntimeError("Windows-only operation")
     exe = str(Path(sys.executable).resolve())
     script = str((Path(__file__).resolve().parents[1] / "main.py"))
     observation = run_command([
         "schtasks", "/Create", "/TN", TASK_NAME,
-        "/TR", f'"{exe}" "{script}" --background --observe-only',
+        "/TR", f'"{exe}" "{script}" --observe-only',
         "/SC", "ONLOGON", "/RL", "LIMITED", "/F",
     ])
     if observation.returncode != 0:
@@ -49,7 +49,6 @@ def install_startup_task():
         "/SC", "MINUTE", "/MO", "30", "/RL", "LIMITED", "/F",
     ])
     if maintenance.returncode != 0:
-        # Do not leave a half-installed startup configuration behind.
         run_command(["schtasks", "/Delete", "/TN", TASK_NAME, "/F"])
         raise RuntimeError(maintenance.stderr.strip() or maintenance.stdout.strip() or "Unable to create maintenance task")
     return observation, maintenance
