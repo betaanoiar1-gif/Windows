@@ -90,28 +90,110 @@ class Engine:
             "auto_cleanup_triggered": bool(critical and self.settings.auto_safe_cleanup),
         }
 
+    @staticmethod
+    def _parse_snapshot_time(value: str) -> float | None:
+        try:
+            return dt.datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp()
+        except (TypeError, ValueError, OverflowError):
+            return None
+
+    def _predict_disk_pressure(self, history, current):
+        """Estimate near-term C: pressure from measured historical free space.
+
+        The model is deliberately conservative: it uses a median pairwise
+        consumption rate, requires enough separated samples, ignores growth
+        below the configured noise floor, and only triggers when projected
+        free space reaches the normal cleanup threshold within the horizon.
+        """
+        points = []
+        for item in history:
+            ts = self._parse_snapshot_time(item.timestamp)
+            if ts is not None and item.disk_free_gb >= 0:
+                points.append((ts, float(item.disk_free_gb)))
+        now = self._parse_snapshot_time(current.timestamp)
+        if now is not None:
+            points.append((now, float(max(current.disk_free_gb, 0.0))))
+        points.sort(key=lambda x: x[0])
+        # Collapse duplicate/near-duplicate samples and retain a bounded tail.
+        filtered = []
+        for point in points:
+            if not filtered or point[0] - filtered[-1][0] >= 300:
+                filtered.append(point)
+            else:
+                filtered[-1] = point
+        points = filtered[-20:]
+
+        result = {
+            "enabled": bool(self.settings.auto_predictive_cleanup),
+            "samples": len(points),
+            "rate_gb_per_hour": 0.0,
+            "projected_free_gb": None,
+            "horizon_hours": self.settings.auto_predictive_horizon_hours,
+            "triggered": False,
+            "reason": "insufficient historical samples",
+        }
+        if not self.settings.auto_predictive_cleanup:
+            result["reason"] = "predictive maintenance disabled"
+            return result
+        if len(points) < self.settings.auto_predictive_min_samples:
+            return result
+
+        rates = []
+        for (t0, f0), (t1, f1) in zip(points, points[1:]):
+            hours = (t1 - t0) / 3600.0
+            if hours <= 0:
+                continue
+            consumed = f0 - f1
+            if consumed > 0:
+                rates.append(consumed / hours)
+        if not rates:
+            result["reason"] = "no measured C: consumption trend"
+            return result
+
+        rates.sort()
+        rate = rates[len(rates) // 2]
+        result["rate_gb_per_hour"] = round(rate, 4)
+        if rate < self.settings.auto_predictive_min_rate_gb_hour:
+            result["reason"] = "measured growth below predictive noise floor"
+            return result
+
+        current_free = max(float(current.disk_free_gb), 0.0)
+        target_free = max(self.settings.auto_cleanup_free_gb, current_free * (self.settings.auto_cleanup_free_percent / 100.0))
+        horizon = self.settings.auto_predictive_horizon_hours
+        projected = max(0.0, current_free - rate * horizon)
+        result["projected_free_gb"] = round(projected, 2)
+        if projected <= target_free and current_free > target_free:
+            result["triggered"] = True
+            result["reason"] = "measured consumption projects threshold breach within horizon"
+        else:
+            result["reason"] = "projected free space remains above cleanup threshold"
+        return result
+
     def autonomous_maintenance(self):
         """Run a bounded, unattended maintenance cycle.
 
-        Observation always runs. Mutation is gated by disk pressure and the
-        local safety policy; only reversible temporary-file quarantine is
-        allowed. No network repair, registry edit, service change, or AI
-        command execution is performed here.
+        Observation always runs. Mutation is gated by measured disk pressure
+        or a conservative historical trend prediction; only reversible
+        temporary-file quarantine is allowed. No network repair, registry
+        edit, service change, or AI command execution is performed here.
         """
         before = snapshot()
+        history = self.db.recent_snapshots(30)
         self.db.snapshot(before)
         pressure = self._disk_pressure(before)
+        prediction = self._predict_disk_pressure(history, before)
+        trigger = bool(pressure["auto_cleanup_triggered"] or prediction["triggered"])
         moved = []
         skipped_reason = None
 
-        if pressure["auto_cleanup_triggered"]:
+        if trigger and self.settings.auto_safe_cleanup:
             candidates = authorize_all(scan_temp(self.settings.max_scan_files), auto=True)
             moved = safe_quarantine(candidates, self.data / "quarantine", self.settings.max_quarantine_files)
             ts = dt.datetime.now(dt.timezone.utc).isoformat()
             for src, dst, token in moved:
                 self.db.action(ts, "autonomous_quarantine", src, f"ok:{dst}:{token}")
         else:
-            skipped_reason = "disk pressure below autonomous cleanup threshold"
+            skipped_reason = "automatic cleanup disabled" if not self.settings.auto_safe_cleanup else prediction["reason"] if not pressure["auto_cleanup_triggered"] else None
 
         after = snapshot()
         self.db.snapshot(after)
@@ -120,10 +202,12 @@ class Engine:
             "before": before,
             "after": after,
             "pressure_before": pressure,
+            "prediction": prediction,
+            "triggered": trigger,
             "pressure_after": after_pressure,
             "moved": moved,
             "skipped_reason": skipped_reason,
-            "mode": "autonomous_safe_maintenance",
+            "mode": "autonomous_predictive_safe_maintenance",
         }
 
     def optimize_safe(self):
