@@ -11,6 +11,12 @@ jobs:
         with:
           python-version: '3.12'
       - run: python -m pip install -r requirements.txt
+      - run: python -m compileall -q smartpc main.py
+        env:
+          PYTHONPATH: ${{ github.workspace }}
       - run: pytest -q
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+      - run: python main.py --help
         env:
           PYTHONPATH: ${{ github.workspace }}
