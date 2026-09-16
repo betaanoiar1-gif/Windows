@@ -12,7 +12,7 @@ from .diagnostics import diagnose
 from .disk_cleanup import scan_deep, summarize as summarize_disk_cleanup
 from .health import health_score
 from .learning import Baseline
-from .monitor import snapshot, snapshot_fast
+from .monitor import snapshot
 from .network import snapshot as network_snapshot, diagnose as diagnose_network, recommended_repairs
 from .network_advanced import advanced_snapshot
 from .network_diagnostics import dns_probe, https_probe, diagnose_connectivity
@@ -173,10 +173,10 @@ class Engine:
         return total
 
     def autonomous_maintenance(self):
-        """Fast unattended cycle: no process enumeration, AI, deep scan or network probes."""
-        # This path deliberately uses the zero-wait snapshot. Expensive diagnostics
-        # belong to explicit inspection; scheduled maintenance must stay lightweight.
-        before = snapshot_fast()
+        """Fast unattended cycle with the complete system snapshot and full functionality."""
+        # Keep the complete telemetry used by diagnosis/baseline/history. The only
+        # speed optimization here is the short sampling interval configured in Settings.
+        before = snapshot(self.settings.fast_monitor_interval, self.settings.max_process_rows)
         history = self.db.recent_snapshots(30)
         self.db.snapshot(before)
         pressure = self._disk_pressure(before)
@@ -214,7 +214,7 @@ class Engine:
                     ts = dt.datetime.now(dt.timezone.utc).isoformat()
                     for src, dst, token in moved:
                         self.db.action(ts, "autonomous_quarantine", src, f"ok:{dst}:{token}")
-            after = snapshot_fast()
+            after = snapshot(self.settings.fast_monitor_interval, self.settings.max_process_rows)
             if moved and after.disk_free_gb + 0.10 < before.disk_free_gb:
                 restored = 0
                 for _src, _dst, token in reversed(moved):
@@ -224,7 +224,7 @@ class Engine:
                     except (OSError, KeyError, FileNotFoundError, FileExistsError):
                         continue
                 moved = []
-                after = snapshot_fast()
+                after = snapshot(self.settings.fast_monitor_interval, self.settings.max_process_rows)
                 skipped_reason = f"verification rollback: free space decreased after cleanup; restored {restored} file(s)"
                 result = "rolled_back"
             else:
