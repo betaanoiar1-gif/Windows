@@ -1,7 +1,9 @@
 import argparse
 import json
 
+from smartpc.config import Settings
 from smartpc.engine import Engine
+from smartpc.observe import observe_once
 from smartpc.ui import run
 from smartpc.windows import install_startup_task, maintenance_status, remove_startup_task, startup_status
 
@@ -13,7 +15,7 @@ def _dump(value):
 def main():
     p = argparse.ArgumentParser(description="SMARTPC AI — safety-first autonomous Windows optimization")
     p.add_argument("--background", action="store_true", help="run one autonomous maintenance cycle")
-    p.add_argument("--observe-only", action="store_true", help="run read-only background observation")
+    p.add_argument("--observe-only", action="store_true", help="run read-only startup observation")
     p.add_argument("--inspect", action="store_true", help="inspect system and network evidence")
     p.add_argument("--deep-disk-scan", action="store_true", help="deep C: drive reclaimable-data inventory; no changes")
     p.add_argument("--network", action="store_true", help="inspect network health")
@@ -29,10 +31,11 @@ def main():
     p.add_argument("--startup-status", action="store_true")
     args = p.parse_args()
 
-    # Read-only observation must win if both flags are supplied. The startup
-    # task intentionally includes --observe-only and must never mutate files.
+    # Read-only observation wins if both flags are supplied.
     if args.observe_only:
-        Engine().inspect(include_ai=False, network_probes=False)
+        settings = Settings.load()
+        result = observe_once(settings.data_dir)
+        _dump({"mode": result["mode"], "baseline": result["baseline"]})
         return 0
     if args.background:
         result = Engine().autonomous_maintenance()
