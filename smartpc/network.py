@@ -30,8 +30,16 @@ def _run(args: list[str], timeout: int = 15) -> tuple[int, str, str]:
     if os.name != "nt":
         return 1, "", "Windows-only network command"
     try:
-        p = subprocess.run(args, capture_output=True, text=True, timeout=timeout, shell=False)
-        return p.returncode, p.stdout, p.stderr
+        p = subprocess.run(
+            args,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=timeout,
+            shell=False,
+        )
+        return p.returncode, p.stdout or "", p.stderr or ""
     except (OSError, subprocess.SubprocessError) as exc:
         return 1, "", str(exc)
 
@@ -94,16 +102,13 @@ def _proxy() -> dict[str, Any]:
     rc, out, err = _run(["netsh", "winhttp", "show", "proxy"])
     text = (out or err or "").strip()
     lower = text.lower()
-    # netsh localizes this message. Depending on the Windows console/code page,
-    # accented French text may also arrive mojibaked (for example "AccŠs").
-    # Use stable language-independent markers instead of requiring one exact
-    # accented phrase. A direct-access line explicitly says no proxy server is
-    # configured, so it must never be reported as an active proxy.
     direct = (
         "direct access" in lower
         or "no proxy server" in lower
         or "sans serveur proxy" in lower
         or ("direct" in lower and "proxy" in lower)
+        or "acc\u0160s direct" in lower
+        or "acc\u00e8s direct" in lower
     )
     return {"enabled": bool(text) and not direct, "raw": text, "source": "winhttp", "command_ok": rc == 0}
 
