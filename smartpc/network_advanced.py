@@ -30,8 +30,16 @@ def _run(args: list[str], timeout: int = 10) -> tuple[int, str, str]:
     if os.name != "nt":
         return 1, "", "Windows-only diagnostic"
     try:
-        p = subprocess.run(args, capture_output=True, text=True, timeout=timeout, shell=False)
-        return p.returncode, p.stdout, p.stderr
+        p = subprocess.run(
+            args,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=timeout,
+            shell=False,
+        )
+        return p.returncode, p.stdout or "", p.stderr or ""
     except (OSError, subprocess.SubprocessError) as exc:
         return 1, "", str(exc)
 
@@ -93,6 +101,7 @@ def _number(value: str | None) -> float | None:
 
 
 def parse_wifi_interfaces(text: str) -> list[dict[str, Any]]:
+    text = text or ""
     blocks = re.split(r"\n\s*\n", text.strip()) if text.strip() else []
     results: list[dict[str, Any]] = []
     for block in blocks:
@@ -115,6 +124,10 @@ def wifi_diagnostics(runner: CommandRunner | None = None) -> dict[str, Any]:
     run = runner or _run
     state_rc, state_out, state_err = run(["netsh", "wlan", "show", "interfaces"], 10)
     driver_rc, driver_out, driver_err = run(["netsh", "wlan", "show", "drivers"], 10)
+    state_out = state_out or ""
+    driver_out = driver_out or ""
+    state_err = state_err or ""
+    driver_err = driver_err or ""
     return {"available": state_rc == 0, "interfaces": parse_wifi_interfaces(state_out), "interfaces_raw": state_out[-6000:], "drivers_raw": driver_out[-8000:], "command_errors": [x for x in (state_err, driver_err) if x], "driver_query_ok": driver_rc == 0}
 
 
