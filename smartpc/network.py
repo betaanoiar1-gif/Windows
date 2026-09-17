@@ -26,20 +26,24 @@ class NetworkSnapshot:
         return asdict(self)
 
 
+def _decode_windows(data: bytes | str | None) -> str:
+    if not data:
+        return ""
+    if isinstance(data, str):
+        return data
+    candidates = []
+    for encoding in ("utf-8", "cp850", "cp1252"):
+        text = data.decode(encoding, errors="replace")
+        candidates.append((text.count("�"), text))
+    return min(candidates, key=lambda item: item[0])[1]
+
+
 def _run(args: list[str], timeout: int = 15) -> tuple[int, str, str]:
     if os.name != "nt":
         return 1, "", "Windows-only network command"
     try:
-        p = subprocess.run(
-            args,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=timeout,
-            shell=False,
-        )
-        return p.returncode, p.stdout or "", p.stderr or ""
+        p = subprocess.run(args, capture_output=True, timeout=timeout, shell=False)
+        return p.returncode, _decode_windows(p.stdout), _decode_windows(p.stderr)
     except (OSError, subprocess.SubprocessError) as exc:
         return 1, "", str(exc)
 
