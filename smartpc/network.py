@@ -94,7 +94,17 @@ def _proxy() -> dict[str, Any]:
     rc, out, err = _run(["netsh", "winhttp", "show", "proxy"])
     text = (out or err or "").strip()
     lower = text.lower()
-    direct = "direct access" in lower or "accès direct" in lower
+    # netsh localizes this message. Depending on the Windows console/code page,
+    # accented French text may also arrive mojibaked (for example "AccŠs").
+    # Use stable language-independent markers instead of requiring one exact
+    # accented phrase. A direct-access line explicitly says no proxy server is
+    # configured, so it must never be reported as an active proxy.
+    direct = (
+        "direct access" in lower
+        or "no proxy server" in lower
+        or "sans serveur proxy" in lower
+        or ("direct" in lower and "proxy" in lower)
+    )
     return {"enabled": bool(text) and not direct, "raw": text, "source": "winhttp", "command_ok": rc == 0}
 
 
