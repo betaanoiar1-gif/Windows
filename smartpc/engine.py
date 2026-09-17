@@ -172,10 +172,44 @@ class Engine:
                 continue
         return total
 
+    def _dry_run_candidates(self):
+        """Apply the same safety policy as automatic cleanup without mutating the filesystem."""
+        candidates = authorize_all(scan_temp(self.settings.max_scan_files), auto=True)
+        selected = []
+        count = 0
+        used_bytes = 0
+        skipped = []
+        for candidate in candidates:
+            if self.auto_policy.allow(candidate, count, used_bytes):
+                selected.append(candidate)
+                count += 1
+                used_bytes += int(candidate.size)
+            else:
+                skipped.append(candidate)
+        return selected, skipped, len(candidates)
+
+    def optimize_safe_dry_run(self):
+        """Read-only simulation of optimize_safe; no file is moved, deleted, or changed."""
+        before = snapshot(self.settings.fast_monitor_interval, self.settings.max_process_rows)
+        self.db.snapshot(before)
+        selected, skipped, scanned = self._dry_run_candidates()
+        planned_bytes = sum(max(0, int(c.size)) for c in selected)
+        return {
+            "mode": "dry_run",
+            "mutation_performed": False,
+            "before": before,
+            "scanned_candidates": scanned,
+            "planned_candidates": selected,
+            "skipped_candidates": skipped,
+            "planned_files": len(selected),
+            "planned_bytes": planned_bytes,
+            "limits": {"max_files": self.settings.auto_max_files, "max_bytes": self.settings.auto_max_bytes},
+            "action": "quarantine",
+            "message": "Simulation only; no filesystem mutation was performed.",
+        }
+
     def autonomous_maintenance(self):
         """Fast unattended cycle with the complete system snapshot and full functionality."""
-        # Keep the complete telemetry used by diagnosis/baseline/history. The only
-        # speed optimization here is the short sampling interval configured in Settings.
         before = snapshot(self.settings.fast_monitor_interval, self.settings.max_process_rows)
         history = self.db.recent_snapshots(30)
         self.db.snapshot(before)
@@ -233,7 +267,7 @@ class Engine:
             after_pressure = self._disk_pressure(after)
             bytes_moved = self._moved_bytes(moved)
             self.db.maintenance_run(started, time.time(), "disk_pressure" if pressure["auto_cleanup_triggered"] else "predictive_pressure", len(moved), bytes_moved, before.disk_free_gb, after.disk_free_gb, result, skipped_reason)
-            return {"before": before, "after": after, "pressure_before": pressure, "prediction": prediction, "triggered": trigger, "pressure_after": after_pressure, "moved": moved, "skipped_reason": skipped_reason, "mode": "autonomous_predictive_safe_maintenance"}
+            return {"before": before, "after": after, "pressure_before": pressure, "prediction": prediction, "pressure_after": after_pressure, "triggered": trigger, "moved": moved, "skipped_reason": skipped_reason, "mode": "autonomous_predictive_safe_maintenance"}
         finally:
             self.db.release_maintenance(owner)
 
