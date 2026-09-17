@@ -25,6 +25,7 @@ def main():
     p.add_argument("--no-ai", action="store_true", help="disable the optional AI advisory request")
     p.add_argument("--no-network-probes", action="store_true", help="skip external DNS/HTTPS/ping probes")
     p.add_argument("--optimize-safe", action="store_true", help="quarantine locally-authorized temporary files")
+    p.add_argument("--dry-run", action="store_true", help="simulate safe optimization without changing files")
     p.add_argument("--restore", metavar="TOKEN", help="restore a quarantined file")
     p.add_argument("--install-startup", action="store_true")
     p.add_argument("--remove-startup", action="store_true")
@@ -85,6 +86,24 @@ def main():
     if args.inspect:
         r = engine.inspect(include_ai=not args.no_ai, network_probes=probes)
         _dump({"system": r["snapshot"].to_dict(), "health_score": r["health_score"], "baseline": r["baseline"], "diagnoses": [d.to_dict() for d in r["diagnoses"]], "candidate_count": len(r["candidates"]), "disk_cleanup": r["disk_cleanup"], "network": r["network"].to_dict(), "network_health": r["network_health"].to_dict(), "network_connectivity": r["network_connectivity"].to_dict() if r["network_connectivity"] else None, "network_advanced": r["network_advanced"], "network_diagnoses": r["network_diagnoses"], "network_recommended_repairs": r["network_recommended_repairs"], "ai": r["ai"]})
+        return 0
+    if args.dry_run:
+        if not args.optimize_safe:
+            # Dry-run has a single meaningful mutation target: safe optimization.
+            args.optimize_safe = True
+        r = engine.optimize_safe_dry_run()
+        _dump({
+            "mode": r["mode"],
+            "mutation_performed": r["mutation_performed"],
+            "scanned_candidates": r["scanned_candidates"],
+            "planned_files": r["planned_files"],
+            "planned_bytes": r["planned_bytes"],
+            "limits": r["limits"],
+            "action": r["action"],
+            "planned_candidates": [c.to_dict() for c in r["planned_candidates"][:100]],
+            "skipped_candidates": [c.to_dict() for c in r["skipped_candidates"][:100]],
+            "message": r["message"],
+        })
         return 0
     if args.optimize_safe:
         r = engine.optimize_safe()
